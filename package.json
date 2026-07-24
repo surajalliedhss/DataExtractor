@@ -1,0 +1,24 @@
+{
+  "name": "clonedocuments",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1094.0",
+    "chromium": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "gitignore": "^0.7.0",
+    "install": "^0.13.0",
+    "npx": "^10.2.2",
+    "playwright": "^1.61.1"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6"
+  }
+}

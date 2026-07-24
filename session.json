@@ -1,0 +1,165 @@
+{
+  "cookies": [
+    {
+      "name": "did",
+      "value": "s%3Av0%3Abad08727-637c-4cbe-87f0-5db89c7f968f%3A239acb2c78767db1c1c4befa561231cfb5a3d99bfa6db87d0e1aafefabc527fd.49WwLHKsVn%2BaSCXawfaalvrWd5%2FiAjZQSsiQ7cmjGg8",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1816460060.295459,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "did_compat",
+      "value": "s%3Av0%3Abad08727-637c-4cbe-87f0-5db89c7f968f%3A239acb2c78767db1c1c4befa561231cfb5a3d99bfa6db87d0e1aafefabc527fd.49WwLHKsVn%2BaSCXawfaalvrWd5%2FiAjZQSsiQ7cmjGg8",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1816460060.295868,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "user_id",
+      "value": "n8YqFG1hWobIzWYJBvc5SYeGm2ZnYHOn4HgPcavNyd%2FooACf1pctuV3WTT2PsbZUWWlZFpVfkBx2jA0eY4Jx6NIQRUPJAfq%2FHqTqhijpdNXmYyUVfqId12c%3D--F0W2nZXyEixOotR%2B--FDg9X9EBDKMKH4i9IHuKjg%3D%3D",
+      "domain": ".api.weinfuse.com",
+      "path": "/",
+      "expires": 1784930392.153633,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "location_id",
+      "value": "xB5cJwwe9JbIQl5ZS6qqXyjwUi%2F%2BJ%2Be2dVgItjqdUAFdU1dyPb%2FQDV%2F5ClkokcDW5TeQaLVLbWP%2Bfte0jgnS6tVWtcXmdMcOQp%2BIwFgjO%2BPgOHfDsEdPTig%3D--GaIAbzF1sVRgi1eo--rBNDVnqWtTo711kh8GBddA%3D%3D",
+      "domain": ".api.weinfuse.com",
+      "path": "/",
+      "expires": 1784930392.153808,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "XSRF-TOKEN",
+      "value": "5YDANuP0QF2JidEvt6eoSdWGnb9IQyCxY-2J7DCvrRTieeLeN4t3TTJpcVstyYMKb9W3j81pLDbywerld1_hBQ",
+      "domain": ".weinfuse.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_session_id",
+      "value": "b396%2FViTrgil6kx3Z%2Fox%2F9Vtwa8hUZTqhijRRYifPSo761TFMIu82F0Mw0WheKs%2FnREjXqlOqmcgaQeUTcY7WpLQyIKp1Dobshb%2FLbbOueEculQPDT7dqUze4Td2l%2BrkiGgTjZp2OpgHnsH7jlaHVn7TYF%2Buzhfg%2BCk4XVVsEca2CAGlyLNN1ToUpOR45x5RnECjzD1YxyR52B12oX1iwTiHjZQBHakVJfCD3%2Fm2bGHwBoKY1BaAWRIBECsuHI8q4IxYPxTxVkJCC7ZIPyyiLoMS9oDC%2FjWw1dz9mwy4%2Bq60vVhGZDSTRBWRrvD9NL%2BXG6TSgQ8cxNanknOllyTC--MBdHl1uTNupXE00p--KhTInHo4wQqypWTLwEl5tQ%3D%3D",
+      "domain": "api.weinfuse.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "auth0-mf",
+      "value": "Y3HAc1J9GL4puXdmjOKnWQ.RnigzPdA0CquCBlV8MzKiISiWseSDdEOtlLNTym26x8ab81-HjBc7vF85_iZeTRFM8ot19LK1JqXJlXzhft8_SWBKWuHYfZLF7rntA7XrCAFJEe-7BcEzKZinScvuRMQ.1784901585990.2592000000.r7lqTxZiQoL1QbejFplgPNgkLIKbkkf7PtnJuHtX3rk",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1785507261.635768,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "auth0",
+      "value": "s%3AlmdM9Xp7TjInB0sFNSUJdb7_iG4mmkyD.kzTRjBnP%2FbWc9ysdMDjFB%2FMqYRjNXKjKfNpkkyOe6nQ",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1784945661.635895,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "auth0-mf_compat",
+      "value": "Y3HAc1J9GL4puXdmjOKnWQ.RnigzPdA0CquCBlV8MzKiISiWseSDdEOtlLNTym26x8ab81-HjBc7vF85_iZeTRFM8ot19LK1JqXJlXzhft8_SWBKWuHYfZLF7rntA7XrCAFJEe-7BcEzKZinScvuRMQ.1784901585990.2592000000.r7lqTxZiQoL1QbejFplgPNgkLIKbkkf7PtnJuHtX3rk",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1785507261.635946,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "auth0_compat",
+      "value": "s%3AlmdM9Xp7TjInB0sFNSUJdb7_iG4mmkyD.kzTRjBnP%2FbWc9ysdMDjFB%2FMqYRjNXKjKfNpkkyOe6nQ",
+      "domain": "login.weinfuse.com",
+      "path": "/",
+      "expires": 1784945661.635995,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_dd_s",
+      "value": "aid=344a41f9-8f27-4ad0-b798-2bf85e3cf095&rum=0&expire=1784903363337&logs=0",
+      "domain": "app.weinfuse.com",
+      "path": "/",
+      "expires": 1816438463,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "_legacy_auth0.OYS98QvEPmuml0S1RBqdk3EBGsqvE3OD.is.authenticated",
+      "value": "true",
+      "domain": "app.weinfuse.com",
+      "path": "/",
+      "expires": 1784988863,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "auth0.OYS98QvEPmuml0S1RBqdk3EBGsqvE3OD.is.authenticated",
+      "value": "true",
+      "domain": "app.weinfuse.com",
+      "path": "/",
+      "expires": 1784988863,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://app.weinfuse.com",
+      "localStorage": [
+        {
+          "name": "wi::asset:sha:current",
+          "value": "{\"__cacheExpiry__\":\"2026-07-24T14:19:14.614Z\",\"__value__\":{\"vendors.css\":\"vendors.0a20c6f8fc2c2d40.css\",\"vendors.js\":\"vendors.c9f03f9e7f01d6b9.js\",\"main.js\":\"main.1990b2eb24e22529.js\",\"main.css\":\"main.d9ad2c11ef8ab358.css\",\"pdf.worker.js\":\"a8d7454a2a4c76a9.js\"}}"
+        },
+        {
+          "name": "wi::lastLocationId",
+          "value": "118"
+        },
+        {
+          "name": "wi::group.settings",
+          "value": "{\"__cacheExpiry__\":\"2026-07-24T14:02:52.155Z\",\"__value__\":{\"require-two-fa\":true,\"appointment-reminders\":true,\"show-rxtoolkit-button\":true,\"claim-submission-orbit\":true,\"allow-forced-scheduling\":true,\"show-additional-service\":true,\"specialty-eorder-available\":true,\"secondary-eligibility-required\":true,\"secondary-verification-required\":true,\"show-template-option-on-order-intake\":true,\"generate-one-treatment-remaining-task\":true,\"schedule-past-no-treatments-remaining\":true}}"
+        },
+        {
+          "name": "persist:hs-beacon-6843ee73-da7d-40dc-93f1-8b08c0d5a049",
+          "value": "{\"chat\":\"{\\\"id\\\":\\\"\\\",\\\"messageBody\\\":\\\"\\\",\\\"persistedMessages\\\":[],\\\"state\\\":\\\"CHAT_STATE_EMPTY\\\",\\\"subject\\\":\\\"\\\"}\",\"docs\":\"{\\\"article\\\":{\\\"data\\\":null,\\\"payload\\\":null,\\\"isLoading\\\":false,\\\"isError\\\":false},\\\"beaconIsOpened\\\":false,\\\"openedArticles\\\":[]}\",\"messages\":\"{\\\"shownMessages\\\":[],\\\"staticConditionsState\\\":{\\\"pageViews\\\":1,\\\"repeatPageViews\\\":[{\\\"url\\\":\\\"https://app.weinfuse.com/\\\",\\\"count\\\":1}]},\\\"syncedCustomerHash\\\":\\\"7028b7a591bed00a99a3cd1a89dbf168\\\",\\\"lastSyncTimestamp\\\":1784901592081,\\\"shownMessagesTimestamps\\\":{}}\",\"status\":\"{\\\"hasShownFabAnimation\\\":false}\",\"user\":\"{}\",\"auth\":\"{\\\"deviceId\\\":\\\"d10dfbc2-9a3d-4ec1-a16b-23486de3d3f1\\\",\\\"jwt\\\":\\\"\\\"}\",\"stats\":\"{}\",\"timeline\":\"{\\\"activity\\\":[{\\\"type\\\":\\\"page-viewed\\\",\\\"timestamp\\\":\\\"2026-07-24T13:59:52.081Z\\\",\\\"url\\\":\\\"https://app.weinfuse.com/\\\",\\\"title\\\":\\\"Allied Infusion - DLDC-Guru Reddy\\\"}]}\",\"ui\":\"{\\\"expandedArticleView\\\":true}\",\"_persist\":\"{\\\"version\\\":0,\\\"rehydrated\\\":true}\"}"
+        },
+        {
+          "name": "persist:hs-beacon-message-6843ee73-da7d-40dc-93f1-8b08c0d5a049",
+          "value": "{\"message\":\"{\\\"name\\\":\\\"\\\",\\\"email\\\":\\\"\\\",\\\"subject\\\":\\\"\\\",\\\"text\\\":\\\"\\\",\\\"attachments\\\":[],\\\"fields\\\":[],\\\"persist\\\":true}\",\"_persist\":\"{\\\"version\\\":-1,\\\"rehydrated\\\":true}\"}"
+        },
+        {
+          "name": "wi::asset:sha:original",
+          "value": "{\"vendors.css\":\"vendors.0a20c6f8fc2c2d40.css\",\"vendors.js\":\"vendors.c9f03f9e7f01d6b9.js\",\"main.js\":\"main.1990b2eb24e22529.js\",\"main.css\":\"main.d9ad2c11ef8ab358.css\",\"pdf.worker.js\":\"a8d7454a2a4c76a9.js\"}"
+        }
+      ]
+    }
+  ]
+}
