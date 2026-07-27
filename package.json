@@ -13,6 +13,7 @@
     "@aws-sdk/client-s3": "^3.1094.0",
     "chromium": "^3.0.3",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "gitignore": "^0.7.0",
     "install": "^0.13.0",
     "npx": "^10.2.2",

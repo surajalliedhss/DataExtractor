@@ -1,6 +1,26 @@
+import fs from "fs";
+import path from "path";
+import https from "https";
+
 function extractOrderId(url) {
   const match = url.match(/\/orders\/(\d+)/);
   return match ? match[1] : `unknown-${Date.now()}`;
+}
+
+async function getRouteAndSchedule(page) {
+  const routeEl = page.locator("td.order-medicine").nth(1);
+  const route =
+    (await routeEl.count()) > 0 ? (await routeEl.innerText()).trim() : "";
+
+  const scheduleEl = page
+    .locator('tr[ng-repeat*="administrationDetails"] dosage-information-react span')
+    .first();
+  const schedule =
+    (await scheduleEl.count()) > 0
+      ? (await scheduleEl.innerText()).trim()
+      : "";
+
+  return { route, schedule };
 }
 
 export async function navigateToPatients(page) {
@@ -28,6 +48,98 @@ export async function navigateToPatientByStatus(page, baseUrl, status) {
   console.warn(`No patient found with status "${status}"`);
 }
 
+export async function getAllPatientsByStatus(page, baseUrl, status) {
+  const patients = [];
+
+  // Sort by Patient ID ascending
+  const patientIdHeader = page.locator('th[md-order-by="identifier"]');
+  await patientIdHeader.waitFor({ timeout: 15000 });
+
+  await patientIdHeader.click();
+  await page.waitForTimeout(1500);
+
+  const sortIcon = patientIdHeader.locator("md-icon.md-sort-icon");
+  let iconClass = await sortIcon.getAttribute("class").catch(() => "");
+  if (iconClass.includes("md-desc") || !iconClass.includes("md-asc")) {
+    await patientIdHeader.click();
+    await page.waitForTimeout(1500);
+  }
+
+  iconClass = await sortIcon.getAttribute("class").catch(() => "");
+  console.log(`Sort state: ${iconClass}`);
+
+  // Change rows per page to 100
+  const rowsSelect = page.locator('md-table-pagination md-select[aria-label^="Rows"]');
+  await rowsSelect.click();
+  await page.waitForTimeout(500);
+  await page.locator('md-option[value="100"]').click();
+
+  await page.waitForFunction(
+    () => document.querySelectorAll('tr[ui-sref^="patient.edit.overview"]').length > 20,
+    { timeout: 15000 }
+  ).catch(() => {
+    console.warn("Rows per page may not have changed — continuing with current count.");
+  });
+
+  await page.waitForTimeout(1000);
+
+  let pageNumber = 1;
+
+  while (true) {
+    await page.waitForSelector('tr[ui-sref^="patient.edit.overview"]', { timeout: 15000 });
+
+    const rowData = await page.$$eval(
+      'tr[ui-sref^="patient.edit.overview"]',
+      (rows) =>
+        rows.map((row) => ({
+          href: row.getAttribute("href") ?? "",
+          status: row.querySelector('td[md-order-by="status"]')?.innerText?.trim() ?? "",
+        }))
+    );
+
+    console.log(`Page ${pageNumber}: ${rowData.length} rows found.`);
+
+    for (const { href, status: rowStatus } of rowData) {
+      if (rowStatus.toLowerCase() === status.toLowerCase()) {
+        if (!href) continue;
+        const url = href.startsWith("http") ? href : `${baseUrl}${href}`;
+        const patientId = url.match(/\/patient\/(\d+)/)?.[1] ?? "unknown";
+        patients.push({ patientId, url });
+      }
+    }
+
+    const nextBtn = page.locator('button[aria-label="Next"]');
+    const isDisabled = await nextBtn.getAttribute("disabled");
+    if (isDisabled !== null) {
+      console.log("No more pages.");
+      break;
+    }
+
+    const firstRowHref = await page.$eval(
+      'tr[ui-sref^="patient.edit.overview"]',
+      (row) => row.getAttribute("href")
+    );
+
+    await nextBtn.click();
+
+    await page.waitForFunction(
+      (prevHref) => {
+        const first = document.querySelector('tr[ui-sref^="patient.edit.overview"]');
+        return first && first.getAttribute("href") !== prevHref;
+      },
+      firstRowHref,
+      { timeout: 15000 }
+    );
+
+    await page.waitForTimeout(500);
+    pageNumber++;
+  }
+
+  console.log(`Collected ${patients.length} patients with status "${status}".`);
+  return patients;
+}
+
+
 export async function navigateToOrdersTab(page) {
   await page.locator('md-tab-item:has(span:text("Orders"))').click();
   await page.waitForTimeout(1000);
@@ -39,15 +151,17 @@ export async function downloadOrderImageFromButton(
   downloadDir = "./downloads",
   orderId = `unknown-${Date.now()}`,
 ) {
-  const fs = await import("fs");
-  const path = await import("path");
-
   if (!fs.existsSync(downloadDir)) {
     fs.mkdirSync(downloadDir, { recursive: true });
   }
 
   const filename = `${orderId}.pdf`;
   const filepath = path.join(downloadDir, filename);
+
+  if (fs.existsSync(filepath)) {
+    console.log(`Already downloaded, skipping: ${filename}`);
+    return "Already Downloaded";
+  }
 
   const pdfUrlPromise = new Promise((resolve, reject) => {
     const timeout = setTimeout(
@@ -71,7 +185,6 @@ export async function downloadOrderImageFromButton(
   let saved = false;
   try {
     const pdfUrl = await pdfUrlPromise;
-    const https = await import("https");
     await new Promise((resolve, reject) => {
       const file = fs.createWriteStream(filepath);
       https
@@ -86,45 +199,75 @@ export async function downloadOrderImageFromButton(
     });
     saved = true;
   } catch (err) {
-    console.warn(
-      "S3 interception failed:",
-      err.message,
-      "— falling back to CDP...",
-    );
+    console.warn("S3 interception failed:", err.message, "— falling back to CDP...");
   }
 
   if (!saved) {
-    await page.waitForSelector(".react-pdf__Page__canvas", { timeout: 10000 });
-    const client = await page.context().newCDPSession(page);
-    const { data } = await client.send("Page.printToPDF", {
-      printBackground: true,
-      paperWidth: 8.5,
-      paperHeight: 11,
-    });
-    const buffer = Buffer.from(data, "base64");
-    fs.writeFileSync(filepath, buffer);
+    try {
+      await page.waitForSelector(".react-pdf__Page__canvas", { timeout: 10000 });
+      const client = await page.context().newCDPSession(page);
+      const { data } = await client.send("Page.printToPDF", {
+        printBackground: true,
+        paperWidth: 8.5,
+        paperHeight: 11,
+      });
+      fs.writeFileSync(filepath, Buffer.from(data, "base64"));
+      saved = true;
+    } catch (err) {
+      console.warn("CDP fallback also failed:", err.message);
+      return "Failed";
+    }
   }
 
   console.log(`Saved: ${filepath}`);
 
   const closeBtn = page.locator('button[aria-label="close"]');
-  const closeBtnCount = await closeBtn.count();
-  if (closeBtnCount > 0) {
+  if ((await closeBtn.count()) > 0) {
     await closeBtn.click();
   }
+
+  return "Downloaded";
 }
 
 export async function downloadOrderImage(page, downloadDir = "./downloads") {
+  // Check if any current order card exists at all
+  const orderCard = page.locator("order-detail-react").first();
+  const cardCount = await orderCard.count();
+
+  if (cardCount === 0) {
+    console.log("No current order found for this patient. Skipping.");
+    return null;
+  }
+
+  // Check if the view order image button exists and is enabled
+  const fileBtn = page.locator('button[aria-label="view order image"]').first();
+  const fileBtnCount = await fileBtn.count();
+
+  if (fileBtnCount === 0) {
+    console.log("No order image button found. Skipping.");
+    return null;
+  }
+
+  const isDisabled = await fileBtn.getAttribute("disabled");
+  if (isDisabled !== null) {
+    console.log("Order image button is disabled. Skipping.");
+    return null;
+  }
+
   const orderText = await page
-    .locator('order-detail-react p.MuiTypography-body1')
+    .locator("order-detail-react p.MuiTypography-body1")
     .first()
-    .innerText();
+    .innerText({ timeout: 5000 })
+    .catch(() => "");
 
   const match = orderText.match(/#(\d+)/);
   const orderId = match ? match[1] : `unknown-${Date.now()}`;
 
-  const fileBtn = page.locator('button[aria-label="view order image"]').first();
-  await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
+  const { route, schedule } = await getRouteAndSchedule(page);
+
+  const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
+
+  return { orderId, route, schedule, downloadStatus };
 }
 
 
@@ -136,16 +279,13 @@ export async function downloadPreviousOrders(
   const prevHeader = page.locator("header.app-subheader", {
     hasText: "Previous Orders",
   });
-  const headerCount = await prevHeader.count();
-  if (headerCount === 0) {
-    return;
-  }
+  if ((await prevHeader.count()) === 0) return [];
 
   const arrowIcons = page.locator(
     'td.md-cell-icon md-icon[ui-sref^="order.show"]',
   );
   const count = await arrowIcons.count();
-  if (count === 0) return;
+  if (count === 0) return [];
 
   const hrefs = [];
   for (let i = 0; i < count; i++) {
@@ -155,17 +295,32 @@ export async function downloadPreviousOrders(
     }
   }
 
+  const results = [];
+
   for (const orderUrl of hrefs) {
+    const orderId = extractOrderId(orderUrl);
+    const filepath = path.join(downloadDir, `${orderId}.pdf`);
+
+    if (fs.existsSync(filepath)) {
+      console.log(`Already downloaded, skipping: ${orderId}.pdf`);
+      results.push({ orderId, route: "", schedule: "", downloadStatus: "Already Downloaded" });
+      continue;
+    }
+
     await page.goto(orderUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);
 
     const fileBtn = page.locator('button[aria-label="insert_drive_file"]');
-    const isDisabled = await fileBtn.getAttribute("disabled");
-    if (isDisabled !== null) {
+    if ((await fileBtn.getAttribute("disabled")) !== null) {
+      results.push({ orderId, route: "", schedule: "", downloadStatus: "Skipped (no image)" });
       continue;
     }
 
-    const orderId = extractOrderId(orderUrl);
-    await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
+    const { route, schedule } = await getRouteAndSchedule(page);
+    const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
+
+    results.push({ orderId, route, schedule, downloadStatus });
   }
+
+  return results;
 }
