@@ -1,11 +1,9 @@
 export async function navigateToPatients(page) {
-  console.log("Navigating to Patients...");
   await page.waitForSelector('li[ui-sref="patients.list"]');
   await page.click('li[ui-sref="patients.list"]');
   await page.waitForURL((url) => url.toString().includes("/patients"), {
     timeout: 10000,
   });
-  console.log("Patients page loaded. URL:", page.url());
 }
 export async function navigateToPatientByStatus(page, baseUrl, status) {
   await page.waitForSelector('tr[ui-sref^="patient.edit.overview"]');
@@ -17,21 +15,22 @@ export async function navigateToPatientByStatus(page, baseUrl, status) {
     if (rowStatus.trim().toLowerCase() === status.toLowerCase()) {
       const href = await row.getAttribute("href");
       const url = href.startsWith("http") ? href : `${baseUrl}${href}`;
-      console.log(`Found patient with status "${status}", navigating to:`, url);
       await page.goto(url, { waitUntil: "domcontentloaded" });
-      console.log("Patient page loaded:", page.url());
       return;
     }
   }
   console.warn(`No patient found with status "${status}"`);
 }
 export async function navigateToOrdersTab(page) {
-  console.log("Navigating to Orders tab...");
   await page.locator('md-tab-item:has(span:text("Orders"))').click();
   await page.waitForTimeout(1000);
-  console.log("Orders tab clicked.");
 }
-export async function downloadOrderImage(page, downloadDir = "./downloads") {
+export async function downloadOrderImageFromButton(
+  page,
+  buttonLocator,
+  downloadDir = "./downloads",
+  filePrefix = "order",
+) {
   const fs = await import("fs");
   const path = await import("path");
   if (!fs.existsSync(downloadDir)) {
@@ -53,14 +52,12 @@ export async function downloadOrderImage(page, downloadDir = "./downloads") {
       }
     });
   });
-  await page.locator('button[aria-label="view order image"]').click();
-  console.log("Clicked order image button, waiting for S3 PDF request...");
+  await buttonLocator.click();
   let saved = false;
   try {
     const pdfUrl = await pdfUrlPromise;
-    console.log("Captured S3 URL:", pdfUrl.substring(0, 80) + "...");
     const https = await import("https");
-    const filename = `order-${Date.now()}.pdf`;
+    const filename = `${filePrefix}-${Date.now()}.pdf`;
     const filepath = path.join(downloadDir, filename);
     await new Promise((resolve, reject) => {
       const file = fs.createWriteStream(filepath);
@@ -74,13 +71,12 @@ export async function downloadOrderImage(page, downloadDir = "./downloads") {
           reject(err);
         });
     });
-    console.log("PDF saved to:", filepath);
     saved = true;
   } catch (err) {
     console.warn(
       "S3 interception failed:",
       err.message,
-      "— falling back to CDP print...",
+      "— falling back to CDP...",
     );
   }
   if (!saved) {
@@ -92,10 +88,59 @@ export async function downloadOrderImage(page, downloadDir = "./downloads") {
       paperHeight: 11,
     });
     const buffer = Buffer.from(data, "base64");
-    const filename = `order-${Date.now()}.pdf`;
+    const filename = `${filePrefix}-${Date.now()}.pdf`;
     const filepath = path.join(downloadDir, filename);
     fs.writeFileSync(filepath, buffer);
-    console.log("PDF saved via CDP to:", filepath);
   }
-  await page.locator('button[aria-label="close"]').click();
+  const closeBtn = page.locator('button[aria-label="close"]');
+  const closeBtnCount = await closeBtn.count();
+  if (closeBtnCount > 0) {
+    await closeBtn.click();
+  }
+}
+export async function downloadOrderImage(page, downloadDir = "./downloads") {
+  const fileBtn = page.locator('button[aria-label="view order image"]');
+  await downloadOrderImageFromButton(page, fileBtn, downloadDir, "order");
+}
+export async function downloadPreviousOrders(
+  page,
+  baseUrl,
+  downloadDir = "./downloads",
+) {
+  const fs = await import("fs");
+  const path = await import("path");
+  const prevHeader = page.locator("header.app-subheader", {
+    hasText: "Previous Orders",
+  });
+  const headerCount = await prevHeader.count();
+  if (headerCount === 0) {
+    return;
+  }
+  const arrowIcons = page.locator(
+    'td.md-cell-icon md-icon[ui-sref^="order.show"]',
+  );
+  const count = await arrowIcons.count();
+  if (count === 0) return;
+  const hrefs = [];
+  for (let i = 0; i < count; i++) {
+    const href = await arrowIcons.nth(i).getAttribute("href");
+    if (href) {
+      hrefs.push(href.startsWith("http") ? href : `${baseUrl}${href}`);
+    }
+  }
+  for (let i = 0; i < hrefs.length; i++) {
+    await page.goto(hrefs[i], { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    const fileBtn = page.locator('button[aria-label="insert_drive_file"]');
+    const isDisabled = await fileBtn.getAttribute("disabled");
+    if (isDisabled !== null) {
+      continue;
+    }
+    await downloadOrderImageFromButton(
+      page,
+      fileBtn,
+      downloadDir,
+      `prev-order-${i + 1}`,
+    );
+  }
 }

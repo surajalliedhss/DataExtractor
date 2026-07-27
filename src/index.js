@@ -7,6 +7,7 @@ import {
   navigateToPatientByStatus,
   navigateToOrdersTab,
   downloadOrderImage,
+  downloadPreviousOrders,
 } from "./scraper.js";
 dotenv.config();
 async function run() {
@@ -24,19 +25,19 @@ async function run() {
   });
   await page.waitForTimeout(3000);
   const landedUrl = page.url();
-  console.log("Landed on:", landedUrl);
   if (!landedUrl.includes("/login")) {
-    console.log("Session valid — already logged in. Skipping login step.");
+    console.log("Session valid — already logged in.");
   } else {
-    console.log("Session missing or expired — logging in...");
     await login(page, process.env.APP_URL);
     await context.storageState({ path: sessionFile });
-    console.log("Session saved.");
   }
   await navigateToPatients(page);
   await navigateToPatientByStatus(page, process.env.APP_URL, "Established");
   await navigateToOrdersTab(page);
   await downloadOrderImage(page, "./downloads");
+  await page.goBack();
+  await navigateToOrdersTab(page);
+  await downloadPreviousOrders(page, process.env.APP_URL, "./downloads");
   await page.pause();
   await browser.close();
 }
