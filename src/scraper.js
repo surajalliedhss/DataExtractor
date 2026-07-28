@@ -505,3 +505,326 @@ export async function scrapeAndDownloadDocuments(page, patientId, downloadDir = 
   return results;
 }
 
+export async function navigateToAppointmentsTab(page) {
+  const apptTab = page.locator('md-tab-item:has(span:text("Appointments"))');
+
+  // Scroll through tab pagination if needed
+  let attempts = 0;
+  while ((await apptTab.count()) === 0 || !(await apptTab.isVisible())) {
+    const nextBtn = page.locator('md-next-button[aria-label="Next Page"]');
+    if ((await nextBtn.count()) === 0 || await nextBtn.getAttribute("aria-disabled") === "true") break;
+    await nextBtn.click();
+    await page.waitForTimeout(500);
+    if (++attempts > 5) break;
+  }
+
+  await apptTab.click();
+  await page.waitForTimeout(1500);
+}
+
+export async function scrapeCompletedAppointmentUrls(page, baseUrl) {
+  const urls = [];
+
+  const rows = page.locator('tbody[md-body] tr[md-row]');
+  const count = await rows.count();
+
+  for (let i = 0; i < count; i++) {
+    const row = rows.nth(i);
+    const cells = row.locator('td[md-cell]');
+
+    // Status is column index 2
+    const status = (await cells.nth(2).innerText()).trim();
+    if (status !== "Complete") continue;
+
+    // "View Completed Note" link is inside the menu — get href directly
+    const viewLink = row.locator('a[aria-label="View Completed Note"]');
+    if ((await viewLink.count()) === 0) {
+      // Try opening the menu first
+      const menuBtn = row.locator('button[aria-label="more_vert"]');
+      if ((await menuBtn.count()) > 0) {
+        await menuBtn.click();
+        await page.waitForTimeout(300);
+      }
+    }
+
+    const href = await viewLink.getAttribute("href").catch(() => null);
+    if (href) {
+      const fullUrl = href.startsWith("http") ? href : `${baseUrl}${href}`;
+      // Extract appointment date from column 0 for reference
+      const dateText = (await cells.nth(0).innerText()).trim().split("\n")[0];
+      // Extract order ID from column 3
+      const orderId = (await cells.nth(3).innerText()).trim();
+      urls.push({ url: fullUrl, date: dateText, orderId });
+    }
+
+    // Close menu if it was opened
+    const backdrop = page.locator('.md-backdrop');
+    if ((await backdrop.count()) > 0) await backdrop.click();
+  }
+
+  return urls;
+}
+
+async function getIvAccessRow(page, tabLabelText) {
+  const tabId = await page
+    .locator('#iv-access-tabs md-tab-item', { hasText: tabLabelText })
+    .first()
+    .getAttribute('aria-controls', { timeout: 2000 })
+    .catch(() => null);
+
+  return tabId
+    ? page.locator(`#${tabId} tbody tr[md-row]`).first()
+    : page.locator('__no_tab_found__');
+}
+
+export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseUrl) {
+  await page.goto(appointmentUrl, { waitUntil: "domcontentloaded" });
+
+  // Wait for real data to land, not for the network to go fully quiet
+  // (which may never happen) and not for a guessed fixed delay.
+  await page
+    .waitForFunction(
+      () => {
+        const el = document.querySelector(
+          'md-select[name="supervisingProvider"] .md-text'
+        );
+        if (!el) return false;
+        const t = el.textContent.trim();
+        return t.length > 0 && t !== "Loading providers...";
+      },
+      { timeout: 10000 }
+    )
+    .catch(() => { });
+
+  const apptIdMatch = appointmentUrl.match(/\/appointment\/(\d+)\//);
+  const appointmentId = apptIdMatch ? apptIdMatch[1] : "";
+
+  // Everything below runs inside the browser in ONE call — no per-field round trips.
+  const data = await page.evaluate(() => {
+    const text = (el) => (el ? el.textContent.trim() : "");
+    const val = (el) => (el ? el.value.trim() : "");
+
+    function getDlText(root, ddText) {
+      if (!root) return "";
+      for (const dl of root.querySelectorAll("dl")) {
+        const dd = Array.from(dl.querySelectorAll("dd")).find(
+          (d) => d.textContent.trim() === ddText
+        );
+        if (dd) {
+          const dt = dl.querySelector("dt");
+          if (!dt) return "";
+          const a = dt.querySelector("a");
+          return (a ? a.textContent : dt.textContent).trim();
+        }
+      }
+      return "";
+    }
+
+    function getDtBeforeDdText(ddText) {
+      const dd = Array.from(document.querySelectorAll("dd")).find(
+        (d) => d.textContent.trim() === ddText
+      );
+      if (!dd) return "";
+      const dt = dd.previousElementSibling;
+      return dt && dt.tagName === "DT" ? dt.textContent.trim() : "";
+    }
+
+    function getInputByLabelText(labelText) {
+      const label = Array.from(document.querySelectorAll("label")).find((l) =>
+        l.textContent.includes(labelText)
+      );
+      if (!label) return "";
+      const container = label.closest(".MuiFormControl-root") || label.parentElement;
+      return val(container ? container.querySelector("input") : null);
+    }
+
+    function getTabPanelRow(labelText) {
+      const tabItem = Array.from(
+        document.querySelectorAll("#iv-access-tabs md-tab-item")
+      ).find((t) => t.textContent.includes(labelText));
+      if (!tabItem) return null;
+      const controls = tabItem.getAttribute("aria-controls");
+      const panel = controls ? document.getElementById(controls) : null;
+      return panel ? panel.querySelector("tbody tr[md-row]") : null;
+    }
+
+    function rowCell(row, index) {
+      if (!row) return "";
+      return text(row.querySelectorAll("td")[index]);
+    }
+
+    const orderSummary = document.querySelector("order-summary");
+
+    const supervisingProvider = text(
+      document.querySelector('md-select[name="supervisingProvider"] .md-text')
+    );
+    const orderNumber = text(orderSummary?.querySelector("h2.flex"));
+    const orderingProvider = getDlText(orderSummary, "Ordering Provider");
+    const orderDate = getDlText(orderSummary, "Order Date");
+    const orderExpires = getDlText(orderSummary, "Order Expires");
+    const primaryDx = getDlText(orderSummary, "Primary Dx");
+    const orderNotes = getDlText(orderSummary, "Notes");
+    const medName = text(orderSummary?.querySelector("td.order-medicine:first-of-type"));
+    const medRoute = text(orderSummary?.querySelector("td.order-medicine:nth-of-type(2)"));
+    const medSchedule = text(orderSummary?.querySelector("dosage-information-react span"));
+    const calcDose = text(orderSummary?.querySelector("td.md-cell-right-align"));
+
+    const arrivalRow = document.querySelector('treatment-vital[type="arrival"] tbody tr');
+    const arrivalTime = rowCell(arrivalRow, 0);
+    const arrivalTemp = rowCell(arrivalRow, 1);
+    const arrivalBP = rowCell(arrivalRow, 2);
+    const arrivalHR = rowCell(arrivalRow, 3);
+    const arrivalR = rowCell(arrivalRow, 4);
+    const arrivalSpO2 = rowCell(arrivalRow, 5);
+
+    const weightLbs = getInputByLabelText("Patient Weight (lbs)");
+    const weightKgs = getInputByLabelText("Patient Weight (kgs)");
+    const heightIn = getInputByLabelText("Patient Height (in)");
+    const heightCm = getInputByLabelText("Patient Height (cm)");
+    const lastKnownWeight = getInputByLabelText("Last Known");
+
+    const treatmentHistory = Array.from(
+      document.querySelectorAll("treatment-history tbody tr[md-row]")
+    ).map((row) => {
+      const cells = row.querySelectorAll("td");
+      return {
+        date: text(cells[0]),
+        med: text(cells[1]),
+        dosage: text(cells[2]),
+        weight: text(cells[3]),
+        staff: text(cells[4]),
+      };
+    });
+
+    const pivRow = getTabPanelRow("PIV");
+    const piccRow = getTabPanelRow("PICC/CVC");
+    const portRow = getTabPanelRow("PORT");
+
+    const flushCard = Array.from(document.querySelectorAll("md-card")).find((c) => {
+      const h2 = c.querySelector("h2");
+      return h2 && h2.textContent.includes("Line Flush");
+    });
+    const flushRow = flushCard ? flushCard.querySelector("tbody tr") : null;
+
+    const adminTbodies = document.querySelectorAll("med-admin table.flush-table tbody");
+    const startTr = adminTbodies[0] ? adminTbodies[0].querySelector("tr") : null;
+    const stopTr = adminTbodies[1] ? adminTbodies[1].querySelector("tr") : null;
+    const adminStart = rowCell(startTr, 0);
+    const adminRate = rowCell(startTr, 2);
+    const adminStop = rowCell(stopTr, 0);
+    // No vital on a row collapses 5 columns into one <td colspan="5">,
+    // so Stop row is Time(0) Event(1) Rate(2) Vitals(3) Staff(4) Infusion(5).
+    const infusionDuration = rowCell(stopTr, 5);
+
+    const departRow = document.querySelector('treatment-vital[type="departure"] tbody tr');
+    const departTime = rowCell(departRow, 0);
+    const departBP = rowCell(departRow, 2);
+    const departHR = rowCell(departRow, 3);
+    const departSpO2 = rowCell(departRow, 5);
+    const timeInOffice = getDtBeforeDdText("Time in Office");
+    const departureTime = val(document.querySelector('input[name="departureTime"]'));
+
+    const prepMed = text(document.querySelector("med-prep h2.flex"));
+    const prepVial = text(document.querySelector("med-prep td.md-cell:nth-of-type(2)"));
+    const prepNDC = text(document.querySelector('med-prep td[ng-if*="multiMed"]'));
+    const prepLot = text(document.querySelector('med-prep td[ng-if*="isPharmacyPrepared"]'));
+    const prepExp = text(document.querySelector("med-prep td:nth-of-type(5)"));
+
+    return {
+      supervisingProvider, orderNumber, orderingProvider, orderDate, orderExpires,
+      primaryDx, orderNotes, medName, medRoute, medSchedule, calcDose,
+      arrivalTime, arrivalTemp, arrivalBP, arrivalHR, arrivalR, arrivalSpO2,
+      weightLbs, weightKgs, heightIn, heightCm, lastKnownWeight, treatmentHistory,
+      pivStatus: rowCell(pivRow, 0), pivTime: rowCell(pivRow, 2),
+      pivCatheter: rowCell(pivRow, 3), pivVein: rowCell(pivRow, 4),
+      pivLocation: rowCell(pivRow, 5), pivPatent: rowCell(pivRow, 6),
+      pivStaff: rowCell(pivRow, 7),
+      piccStatus: rowCell(piccRow, 0), piccLineType: rowCell(piccRow, 1),
+      piccArmCircumference: rowCell(piccRow, 2), piccLocation: rowCell(piccRow, 3),
+      piccBloodReturn: rowCell(piccRow, 4), piccFlushOk: rowCell(piccRow, 5),
+      piccLastDressingChange: rowCell(piccRow, 6),
+      piccDressingChangedToday: rowCell(piccRow, 7),
+      portStatus: rowCell(portRow, 0), portLocation: rowCell(portRow, 1),
+      portNeedleSize: rowCell(portRow, 2), portNeedleLength: rowCell(portRow, 3),
+      portBloodReturn: rowCell(portRow, 4), portFlushOk: rowCell(portRow, 5),
+      portLastDressingChange: rowCell(portRow, 6), portMaintToday: rowCell(portRow, 7),
+      flushTime: rowCell(flushRow, 0), flushType: rowCell(flushRow, 1),
+      flushQty: rowCell(flushRow, 3),
+      adminStart, adminStop, adminRate, infusionDuration,
+      departTime, departBP, departHR, departSpO2, timeInOffice, departureTime,
+      prepMed, prepVial, prepNDC, prepLot, prepExp,
+    };
+  });
+
+  return {
+    patientId,
+    appointmentId,
+    appointmentDate: appointmentUrl, // overridden by caller with the appointments-list date
+    supervisingProvider: data.supervisingProvider,
+    orderNumber: data.orderNumber.replace(/\n.*/g, "").trim(),
+    orderingProvider: data.orderingProvider,
+    orderDate: data.orderDate,
+    orderExpires: data.orderExpires,
+    primaryDx: data.primaryDx,
+    orderNotes: data.orderNotes,
+    medication: data.medName,
+    route: data.medRoute,
+    schedule: data.medSchedule,
+    calculatedDose: data.calcDose,
+    arrivalTime: data.arrivalTime,
+    arrivalTemp: data.arrivalTemp,
+    arrivalBP: data.arrivalBP,
+    arrivalHR: data.arrivalHR,
+    arrivalR: data.arrivalR,
+    arrivalSpO2: data.arrivalSpO2,
+    weightLbs: data.weightLbs,
+    weightKgs: data.weightKgs,
+    heightIn: data.heightIn,
+    heightCm: data.heightCm,
+    lastKnownWeight: data.lastKnownWeight,
+    treatmentHistory: data.treatmentHistory
+      .map((h) => `${h.date}: ${h.med} ${h.dosage} (${h.staff})`)
+      .join(" | "),
+    pivStatus: data.pivStatus,
+    pivTime: data.pivTime,
+    pivCatheter: data.pivCatheter,
+    pivVein: data.pivVein,
+    pivLocation: data.pivLocation,
+    pivPatent: data.pivPatent,
+    pivStaff: data.pivStaff,
+    piccStatus: data.piccStatus,
+    piccLineType: data.piccLineType,
+    piccArmCircumference: data.piccArmCircumference,
+    piccLocation: data.piccLocation,
+    piccBloodReturn: data.piccBloodReturn,
+    piccFlushOk: data.piccFlushOk,
+    piccLastDressingChange: data.piccLastDressingChange,
+    piccDressingChangedToday: data.piccDressingChangedToday,
+    portStatus: data.portStatus,
+    portLocation: data.portLocation,
+    portNeedleSize: data.portNeedleSize,
+    portNeedleLength: data.portNeedleLength,
+    portBloodReturn: data.portBloodReturn,
+    portFlushOk: data.portFlushOk,
+    portLastDressingChange: data.portLastDressingChange,
+    portMaintToday: data.portMaintToday,
+    flushTime: data.flushTime,
+    flushType: data.flushType,
+    flushQty: data.flushQty,
+    adminStart: data.adminStart,
+    adminStop: data.adminStop,
+    adminRate: data.adminRate,
+    infusionDuration: data.infusionDuration,
+    departureTime: data.departureTime,
+    departTime: data.departTime,
+    departBP: data.departBP,
+    departHR: data.departHR,
+    departSpO2: data.departSpO2,
+    timeInOffice: data.timeInOffice,
+    prepMed: data.prepMed,
+    prepVial: data.prepVial,
+    prepNDC: data.prepNDC,
+    prepLot: data.prepLot,
+    prepExp: data.prepExp,
+  };
+}

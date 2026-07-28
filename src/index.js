@@ -7,10 +7,13 @@ import {
   getAllPatientsByStatus,
   navigateToOrdersTab,
   navigateToDocumentsTab,
+  navigateToAppointmentsTab,
   downloadOrderImage,
   scrapeAndDownloadDocuments,
+  scrapeCompletedAppointmentUrls,
+  scrapeTreatmentNote,
 } from "./scraper.js";
-import { createOrdersExcel, updateDocumentsExcel } from "./excel.js";
+import { createOrdersExcel, updateDocumentsExcel, updateTreatmentNotesExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
 import path from "path";
 
@@ -49,6 +52,7 @@ async function run() {
   const checkpoint = loadCheckpoint();
   const allOrders = [];
   const allDocuments = [];
+  const allTreatmentNotes = [];
   await navigateToPatients(page);
 
   const patients = await getAllPatientsByStatus(
@@ -118,10 +122,29 @@ async function run() {
       });
       processed++;
     }
+    // ---- Treatment Notes section ----
+    await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+    await navigateToAppointmentsTab(page);
+
+    const completedAppts = await scrapeCompletedAppointmentUrls(page, process.env.APP_URL);
+    console.log(`Found ${completedAppts.length} completed appointments for patient ${patient.patientId}`);
+
+    for (const appt of completedAppts) {
+      try {
+        const note = await scrapeTreatmentNote(page, patient.patientId, appt.url, process.env.APP_URL);
+        note.appointmentDate = appt.date; // use the date from the appointments list
+        allTreatmentNotes.push(note);
+        console.log(`Treatment note scraped: appointment ${note.appointmentId} (${appt.date})`);
+      } catch (err) {
+        console.warn(`Failed to scrape treatment note ${appt.url}:`, err.message);
+      }
+    }
+    // ----------------------------------
   }
 
   await createOrdersExcel(allOrders.filter(Boolean), DOWNLOAD_DIR);
   await updateDocumentsExcel(allDocuments, DOWNLOAD_DIR);
+  await updateTreatmentNotesExcel(allTreatmentNotes, DOWNLOAD_DIR);
 
   await browser.close();
 }
