@@ -104,3 +104,63 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
     await workbook.xlsx.writeFile(filepath);
     console.log(`Excel updated: ${added} new rows added. File: ${filepath}`);
 }
+
+export async function updateDocumentsExcel(documents, outputDir = "./downloads") {
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const filepath = path.join(outputDir, "orders.xlsx");
+    const workbook = new ExcelJS.Workbook();
+
+    if (fs.existsSync(filepath)) {
+        await workbook.xlsx.readFile(filepath);
+    }
+
+    let sheet = workbook.getWorksheet("Documents");
+    if (!sheet) {
+        sheet = workbook.addWorksheet("Documents");
+        sheet.columns = [
+            { header: "Patient ID", key: "patientId", width: 15 },
+            { header: "Received Date", key: "receivedDate", width: 18 },
+            { header: "Category", key: "category", width: 25 },
+            { header: "From", key: "from", width: 20 },
+            { header: "Description", key: "description", width: 35 },
+            { header: "Entered By", key: "enteredBy", width: 15 },
+            { header: "Entered Date", key: "enteredDate", width: 18 },
+            { header: "File", key: "filename", width: 30 },
+            { header: "Download Status", key: "downloadStatus", width: 22 },
+        ];
+        sheet.getRow(1).font = { bold: true };
+    }
+
+    // Dedup by patientId + receivedDate + description
+    const existingKeys = new Set();
+    sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const key = `${row.getCell(1).value}|${row.getCell(2).value}|${row.getCell(5).value}`;
+        existingKeys.add(key);
+    });
+
+    let added = 0;
+    for (const doc of documents) {
+        const key = `${doc.patientId}|${doc.receivedDate}|${doc.description}`;
+        if (existingKeys.has(key)) continue;
+
+        const row = sheet.addRow(doc);
+
+        const color = STATUS_COLORS[doc.downloadStatus];
+        if (color) {
+            row.getCell(9).fill = {
+                type: "pattern",
+                pattern: "solid",
+                fgColor: { argb: color },
+            };
+        }
+
+        added++;
+    }
+
+    await workbook.xlsx.writeFile(filepath);
+    console.log(`Documents sheet updated: ${added} new rows added.`);
+}

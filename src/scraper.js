@@ -163,28 +163,37 @@ export async function downloadOrderImageFromButton(
     return "Already Downloaded";
   }
 
-  const pdfUrlPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("PDF URL not captured within 30s")),
-      30000,
-    );
-    page.on("request", (request) => {
-      const url = request.url();
-      if (
-        url.includes("s3.us-west-2.amazonaws.com") &&
-        url.includes("X-Amz-Signature")
-      ) {
-        clearTimeout(timeout);
-        resolve(url);
-      }
-    });
-  });
-
-  await buttonLocator.click();
-
   let saved = false;
+
+  // Try S3 interception first
   try {
-    const pdfUrl = await pdfUrlPromise;
+    const pdfUrl = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("PDF URL not captured within 30s")),
+        30000,
+      );
+
+      const onRequest = (request) => {
+        const url = request.url();
+        if (
+          url.includes("s3.us-west-2.amazonaws.com") &&
+          url.includes("X-Amz-Signature")
+        ) {
+          clearTimeout(timeout);
+          page.off("request", onRequest); // clean up listener
+          resolve(url);
+        }
+      };
+
+      page.on("request", onRequest);
+
+      buttonLocator.click().catch((err) => {
+        clearTimeout(timeout);
+        page.off("request", onRequest);
+        reject(err);
+      });
+    });
+
     await new Promise((resolve, reject) => {
       const file = fs.createWriteStream(filepath);
       https
@@ -197,11 +206,13 @@ export async function downloadOrderImageFromButton(
           reject(err);
         });
     });
+
     saved = true;
   } catch (err) {
     console.warn("S3 interception failed:", err.message, "— falling back to CDP...");
   }
 
+  // CDP fallback
   if (!saved) {
     try {
       await page.waitForSelector(".react-pdf__Page__canvas", { timeout: 10000 });
@@ -219,6 +230,8 @@ export async function downloadOrderImageFromButton(
     }
   }
 
+  if (!saved) return "Failed";
+
   console.log(`Saved: ${filepath}`);
 
   const closeBtn = page.locator('button[aria-label="close"]');
@@ -228,6 +241,7 @@ export async function downloadOrderImageFromButton(
 
   return "Downloaded";
 }
+
 
 export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloads") {
   const results = [];
@@ -375,5 +389,119 @@ async function getReferralData(page) {
     approvedTreatments: await getCell(8),  // Treatments Approved
     treatmentsRemaining: await getCell(9),  // Treatments Remaining
   };
+}
+
+export async function navigateToDocumentsTab(page) {
+  // Try clicking Documents tab directly first
+  const docTab = page.locator('md-tab-item:has(span:text("Documents"))');
+
+  // If tab is hidden behind pagination arrow, click next until visible
+  let attempts = 0;
+  while ((await docTab.count()) === 0 || !(await docTab.isVisible())) {
+    const nextBtn = page.locator('md-next-button[aria-label="Next Page"]');
+    if ((await nextBtn.count()) === 0 || await nextBtn.getAttribute("aria-disabled") === "true") break;
+    await nextBtn.click();
+    await page.waitForTimeout(500);
+    if (++attempts > 5) break;
+  }
+
+  await docTab.click();
+  await page.waitForTimeout(1000);
+}
+
+export async function scrapeAndDownloadDocuments(page, patientId, downloadDir = "./downloads/documents") {
+  const results = [];
+
+  if (!fs.existsSync(downloadDir)) {
+    fs.mkdirSync(downloadDir, { recursive: true });
+  }
+
+  const rows = page.locator('tbody[md-body] tr[md-row]');
+  const count = await rows.count();
+  if (count === 0) return results;
+
+  for (let i = 0; i < count; i++) {
+    const row = rows.nth(i);
+    const cells = row.locator('td[md-cell]');
+
+    const receivedDate = (await cells.nth(0).innerText()).trim();
+    const category = (await cells.nth(1).innerText()).trim();
+    const from = (await cells.nth(2).innerText()).trim();
+    const description = (await cells.nth(3).innerText()).trim();
+    const enteredBy = (await cells.nth(4).innerText()).trim();
+    const enteredDate = (await cells.nth(5).innerText()).trim();
+
+    const fileBtn = cells.nth(6).locator('button[aria-label="insert_drive_file"]');
+    let downloadStatus = "No File";
+    let filename = "";
+
+    if ((await fileBtn.count()) > 0) {
+      const cleanDate = receivedDate.replace(/\//g, "-");
+      const cleanCategory = category.replace(/[^a-zA-Z0-9-_]/g, "_").replace(/_+/g, "_");
+      const slug = `${patientId}_${cleanDate}_${cleanCategory}`;
+      filename = `${slug}.pdf`;
+      const filepath = path.join(downloadDir, filename);
+
+      if (fs.existsSync(filepath)) {
+        downloadStatus = "Already Downloaded";
+      } else {
+        try {
+          await fileBtn.click();
+          await page.waitForSelector('div.md-dialog-container', { state: 'visible', timeout: 10000 });
+          await page.waitForTimeout(500);
+
+          const printLink = page.locator('button[aria-label="print"] a[href*="s3.us-west-2.amazonaws.com"]').first();
+          const s3Url = await printLink.getAttribute("href");
+
+          if (s3Url) {
+            await new Promise((resolve, reject) => {
+              const file = fs.createWriteStream(filepath);
+              https.get(s3Url, (response) => {
+                response.pipe(file);
+                file.on("finish", () => file.close(resolve));
+              }).on("error", (err) => {
+                fs.unlink(filepath, () => { });
+                reject(err);
+              });
+            });
+            downloadStatus = "Downloaded";
+            console.log(`Saved: ${filepath}`);
+          } else {
+            downloadStatus = "Failed";
+            console.warn(`No S3 URL found for document ${slug}`);
+          }
+        } catch (err) {
+          downloadStatus = "Failed";
+          console.warn(`Failed to download document ${slug}:`, err.message);
+        } finally {
+          // Close button: aria-label is on md-icon child, not the button — use ng-click instead
+          const closeBtn = page.locator('button[ng-click="vm.cancel()"]').first();
+          if ((await closeBtn.count()) > 0) {
+            await closeBtn.click();
+          }
+
+          // Wait for dialog container to detach
+          await page.waitForSelector('div.md-dialog-container', { state: 'detached', timeout: 10000 })
+            .catch(() => page.waitForTimeout(1000));
+
+          await page.waitForTimeout(300);
+        }
+      }
+    }
+
+    results.push({
+      patientId,
+      receivedDate,
+      category,
+      from,
+      description,
+      enteredBy,
+      enteredDate,
+      filename,
+      downloadStatus,
+    });
+  }
+
+  return results;
 }
 

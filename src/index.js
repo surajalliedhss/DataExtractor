@@ -6,18 +6,21 @@ import {
   navigateToPatients,
   getAllPatientsByStatus,
   navigateToOrdersTab,
+  navigateToDocumentsTab,
   downloadOrderImage,
-  downloadPreviousOrders,
+  scrapeAndDownloadDocuments,
 } from "./scraper.js";
-import { createOrdersExcel } from "./excel.js";
+import { createOrdersExcel, updateDocumentsExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
+import path from "path";
 
 dotenv.config();
 
 async function run() {
   const PATIENT_LIMIT = parseInt(process.env.PATIENT_LIMIT ?? "20", 10);
   const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "./downloads";
-
+  const ORDERS_DIR = path.join(DOWNLOAD_DIR, "orders");
+  const DOCUMENTS_DIR = path.join(DOWNLOAD_DIR, "documents");
   const sessionFile = "session.json";
   const hasSession = fs.existsSync(sessionFile);
   const browser = await chromium.launch({ headless: false });
@@ -45,7 +48,7 @@ async function run() {
 
   const checkpoint = loadCheckpoint();
   const allOrders = [];
-
+  const allDocuments = [];
   await navigateToPatients(page);
 
   const patients = await getAllPatientsByStatus(
@@ -74,7 +77,7 @@ async function run() {
       await page.goto(patient.url, { waitUntil: "domcontentloaded" });
       await navigateToOrdersTab(page);
 
-      const orders = await downloadOrderImage(page, process.env.APP_URL, DOWNLOAD_DIR);
+      const orders = await downloadOrderImage(page, process.env.APP_URL, ORDERS_DIR);
 
       if (orders.length > 0) {
         for (const order of orders) {
@@ -93,6 +96,14 @@ async function run() {
         });
       }
 
+      // ---- Documents section ----
+      await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+      await navigateToDocumentsTab(page);
+      const docs = await scrapeAndDownloadDocuments(page, patient.patientId, DOCUMENTS_DIR);
+      allDocuments.push(...docs);
+      console.log(`Documents scraped for patient ${patient.patientId}: ${docs.length} found.`);
+      // ---------------------------
+
       markPatientDone(patient.patientId, checkpoint);
       processed++;
       console.log(`Patient ${patient.patientId} done. (${processed}/${PATIENT_LIMIT})`);
@@ -109,7 +120,8 @@ async function run() {
     }
   }
 
-  await createOrdersExcel(allOrders.filter(Boolean), "./downloads");
+  await createOrdersExcel(allOrders.filter(Boolean), DOWNLOAD_DIR);
+  await updateDocumentsExcel(allDocuments, DOWNLOAD_DIR);
 
   await browser.close();
 }

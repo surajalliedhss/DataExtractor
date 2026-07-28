@@ -17,6 +17,7 @@
     "gitignore": "^0.7.0",
     "install": "^0.13.0",
     "npx": "^10.2.2",
+    "path": "^0.12.7",
     "playwright": "^1.61.1"
   },
   "devDependencies": {
