@@ -34,7 +34,19 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
             { header: "Schedule", key: "schedule", width: 30 },
             { header: "Download Status", key: "downloadStatus", width: 22 },
             { header: "Notes", key: "notes", width: 25 },
+            { header: "ReferralRequested", key: "referralRequested", width: 20 },
+            { header: "ReferralBy", key: "referralBy", width: 20 },
+            { header: "ReferralPlan", key: "referralPlan", width: 20 },
+            { header: "ReferralStatus", key: "referralStatus", width: 20 },
+            { header: "ReferralDecision Reason", key: "referralDecisionReason", width: 25 },
+            { header: "Referral Number", key: "referralNumber", width: 18 },
+            { header: "ReferralApproved", key: "referralApproved", width: 20 },
+            { header: "ReferralExpires", key: "referralExpires", width: 20 },
+            { header: "ReferralTreatments", key: "referralTreatments", width: 22 },
+            { header: "Approved Treatments", key: "approvedTreatments", width: 22 },
+            { header: "Treatments Remaining", key: "treatmentsRemaining", width: 22 },
         ];
+
         sheet.getRow(1).font = { bold: true };
     }
 
@@ -63,7 +75,19 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
             schedule: order.schedule ?? "",
             downloadStatus: order.downloadStatus ?? "",
             notes: "",
+            referralRequested: order.referralRequested ?? "",
+            referralBy: order.referralBy ?? "",
+            referralPlan: order.referralPlan ?? "",
+            referralStatus: order.referralStatus ?? "",
+            referralDecisionReason: order.referralDecisionReason ?? "",
+            referralNumber: order.referralNumber ?? "",
+            referralApproved: order.referralApproved ?? "",
+            referralExpires: order.referralExpires ?? "",
+            referralTreatments: order.referralTreatments ?? "",
+            approvedTreatments: order.approvedTreatments ?? "",
+            treatmentsRemaining: order.treatmentsRemaining ?? "",
         });
+
 
         const color = STATUS_COLORS[order.downloadStatus];
         if (color) {

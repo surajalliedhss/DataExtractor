@@ -237,10 +237,12 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
 
   if (cardCount > 0) {
     const fileBtn = page.locator('button[aria-label="view order image"]').first();
+    const detailBtn = page.locator('button[aria-label="go to order detail"]').first();
     const fileBtnCount = await fileBtn.count();
     const isDisabled = fileBtnCount > 0 ? await fileBtn.getAttribute("disabled") : "disabled";
 
     if (fileBtnCount > 0 && isDisabled === null) {
+      // Extract orderId from the card text before navigating
       const orderText = await page
         .locator("order-detail-react p.MuiTypography-body1")
         .first()
@@ -250,22 +252,40 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
       const match = orderText.match(/#(\d+)/);
       const orderId = match ? match[1] : `unknown-${Date.now()}`;
 
-      const { route, schedule } = await getRouteAndSchedule(page);
+      // Download the PDF via the file button
       const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
-
-      results.push({ orderId, route, schedule, downloadStatus });
-
-      // Wait for modal to close before scrolling to previous orders
       await page.waitForTimeout(1000);
+
+      // Navigate inside order detail to get route, schedule, referral
+      let route = "", schedule = "", referralData = {};
+      if ((await detailBtn.count()) > 0) {
+        await detailBtn.click();
+        await page.waitForTimeout(2000);
+
+        const rs = await getRouteAndSchedule(page);
+        route = rs.route;
+        schedule = rs.schedule;
+        referralData = await getReferralData(page);
+
+        await page.goBack();
+        await page.waitForTimeout(1500);
+      } else {
+        // Fallback: get route/schedule from card directly
+        const rs = await getRouteAndSchedule(page);
+        route = rs.route;
+        schedule = rs.schedule;
+      }
+
+      results.push({ orderId, route, schedule, downloadStatus, ...referralData });
     }
   }
 
-  // Now check previous orders — page should be on orders tab still
   const previousOrders = await downloadPreviousOrders(page, baseUrl, downloadDir);
   results.push(...previousOrders);
 
   return results;
 }
+
 
 export async function downloadPreviousOrders(
   page,
@@ -320,3 +340,40 @@ export async function downloadPreviousOrders(
 
   return results;
 }
+
+async function getReferralData(page) {
+  const empty = {
+    referralRequested: "", referralBy: "", referralPlan: "", referralStatus: "",
+    referralDecisionReason: "", referralNumber: "", referralApproved: "",
+    referralExpires: "", referralTreatments: "", approvedTreatments: "", treatmentsRemaining: "",
+  };
+
+  // Check if referrals card exists
+  const referralCard = page.locator('md-card:has(h2:text("Referrals"))').first();
+  if ((await referralCard.count()) === 0) return empty;
+
+  // Get the most recent referral row (first row — already ordered by -requestedDate)
+  const firstRow = referralCard.locator('tbody[md-body] tr[md-row]').first();
+  if ((await firstRow.count()) === 0) return empty;
+
+  const cells = firstRow.locator('td[md-cell]');
+
+  const getCell = async (index) => {
+    const cell = cells.nth(index);
+    return (await cell.count()) > 0 ? (await cell.innerText()).trim() : "";
+  };
+
+  return {
+    referralRequested: await getCell(0),  // Requested
+    referralBy: await getCell(1),  // By
+    referralPlan: await getCell(2),  // Plan
+    referralStatus: await getCell(3),  // Status
+    referralDecisionReason: await getCell(4),  // Decision Reason
+    referralNumber: await getCell(5),  // Referral Number
+    referralApproved: await getCell(6),  // Approved
+    referralExpires: await getCell(7),  // Expires
+    approvedTreatments: await getCell(8),  // Treatments Approved
+    treatmentsRemaining: await getCell(9),  // Treatments Remaining
+  };
+}
+
