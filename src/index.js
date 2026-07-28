@@ -68,34 +68,22 @@ async function run() {
       continue;
     }
 
-    console.log(
-      `[${processed + 1}/${PATIENT_LIMIT}] Processing patient ${patient.patientId}...`
-    );
+    console.log(`[${processed + 1}/${PATIENT_LIMIT}] Processing patient ${patient.patientId}...`);
 
     try {
       await page.goto(patient.url, { waitUntil: "domcontentloaded" });
       await navigateToOrdersTab(page);
 
-      const currentOrder = await downloadOrderImage(page, DOWNLOAD_DIR);
-      if (currentOrder) {
-        const entry = { ...currentOrder, patientId: patient.patientId };
-        console.log("Pushing order entry:", entry); // debug line
-        allOrders.push(entry);
-      }
+      const orders = await downloadOrderImage(page, process.env.APP_URL, DOWNLOAD_DIR);
 
-      await page.goBack();
-      await navigateToOrdersTab(page);
-
-      const previousOrders = await downloadPreviousOrders(
-        page,
-        process.env.APP_URL,
-        "./downloads"
-      );
-      allOrders.push(
-        ...previousOrders.map((o) => ({ ...o, patientId: patient.patientId }))
-      );
-
-      if (!currentOrder && previousOrders.length === 0) {
+      if (orders.length > 0) {
+        for (const order of orders) {
+          const entry = { ...order, patientId: patient.patientId };
+          console.log("Pushing order entry:", entry);
+          allOrders.push(entry);
+        }
+      } else {
+        console.log("No orders found for this patient.");
         allOrders.push({
           patientId: patient.patientId,
           orderId: `patient-${patient.patientId}`,
@@ -107,14 +95,9 @@ async function run() {
 
       markPatientDone(patient.patientId, checkpoint);
       processed++;
-      console.log(
-        `Patient ${patient.patientId} done. (${processed}/${PATIENT_LIMIT})`
-      );
+      console.log(`Patient ${patient.patientId} done. (${processed}/${PATIENT_LIMIT})`);
     } catch (err) {
-      console.error(
-        `Error processing patient ${patient.patientId}:`,
-        err.message
-      );
+      console.error(`Error processing patient ${patient.patientId}:`, err.message);
       allOrders.push({
         patientId: patient.patientId,
         orderId: `patient-${patient.patientId}`,

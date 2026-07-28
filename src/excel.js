@@ -49,6 +49,10 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
     let added = 0;
     for (const order of orders) {
         if (!order) continue;
+        if (!order.orderId) {
+            console.warn("Skipping order with missing orderId:", order);
+            continue;
+        }
         if (existingOrderIds.has(String(order.orderId))) continue;
 
         const row = sheet.addRow({

@@ -229,47 +229,43 @@ export async function downloadOrderImageFromButton(
   return "Downloaded";
 }
 
-export async function downloadOrderImage(page, downloadDir = "./downloads") {
-  // Check if any current order card exists at all
+export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloads") {
+  const results = [];
+
   const orderCard = page.locator("order-detail-react").first();
   const cardCount = await orderCard.count();
 
-  if (cardCount === 0) {
-    console.log("No current order found for this patient. Skipping.");
-    return null;
+  if (cardCount > 0) {
+    const fileBtn = page.locator('button[aria-label="view order image"]').first();
+    const fileBtnCount = await fileBtn.count();
+    const isDisabled = fileBtnCount > 0 ? await fileBtn.getAttribute("disabled") : "disabled";
+
+    if (fileBtnCount > 0 && isDisabled === null) {
+      const orderText = await page
+        .locator("order-detail-react p.MuiTypography-body1")
+        .first()
+        .innerText({ timeout: 5000 })
+        .catch(() => "");
+
+      const match = orderText.match(/#(\d+)/);
+      const orderId = match ? match[1] : `unknown-${Date.now()}`;
+
+      const { route, schedule } = await getRouteAndSchedule(page);
+      const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
+
+      results.push({ orderId, route, schedule, downloadStatus });
+
+      // Wait for modal to close before scrolling to previous orders
+      await page.waitForTimeout(1000);
+    }
   }
 
-  // Check if the view order image button exists and is enabled
-  const fileBtn = page.locator('button[aria-label="view order image"]').first();
-  const fileBtnCount = await fileBtn.count();
+  // Now check previous orders — page should be on orders tab still
+  const previousOrders = await downloadPreviousOrders(page, baseUrl, downloadDir);
+  results.push(...previousOrders);
 
-  if (fileBtnCount === 0) {
-    console.log("No order image button found. Skipping.");
-    return null;
-  }
-
-  const isDisabled = await fileBtn.getAttribute("disabled");
-  if (isDisabled !== null) {
-    console.log("Order image button is disabled. Skipping.");
-    return null;
-  }
-
-  const orderText = await page
-    .locator("order-detail-react p.MuiTypography-body1")
-    .first()
-    .innerText({ timeout: 5000 })
-    .catch(() => "");
-
-  const match = orderText.match(/#(\d+)/);
-  const orderId = match ? match[1] : `unknown-${Date.now()}`;
-
-  const { route, schedule } = await getRouteAndSchedule(page);
-
-  const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
-
-  return { orderId, route, schedule, downloadStatus };
+  return results;
 }
-
 
 export async function downloadPreviousOrders(
   page,
