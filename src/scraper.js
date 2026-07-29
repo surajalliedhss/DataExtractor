@@ -653,6 +653,60 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
       return text(row.querySelectorAll("td")[index]);
     }
 
+    // Generic reader for the three "light-table" prep tables (main vial
+    // selection, Diluent Selection, Mixed In). Maps header text -> cell text
+    // for whichever row actually has Qty > 0 (the row that was really used),
+    // falling back to the first row if none has a positive qty.
+    function getPrepTableRow(tableEl) {
+      if (!tableEl) return {};
+      const headers = Array.from(tableEl.querySelectorAll("thead th"))
+        .map((th) => th.textContent.trim())
+        .filter(Boolean);
+      const qtyIdx = headers.indexOf("Qty");
+      const rows = Array.from(tableEl.querySelectorAll("tbody tr"));
+
+      const readQty = (row) => {
+        const cell = row.querySelectorAll("td")[qtyIdx];
+        if (!cell) return NaN;
+        const input = cell.querySelector("input");
+        return parseFloat(input ? input.value : cell.textContent);
+      };
+
+      let chosen = rows.find((row) => {
+        const q = readQty(row);
+        return !isNaN(q) && q > 0;
+      });
+      if (!chosen) chosen = rows[0];
+      if (!chosen) return {};
+
+      const cells = chosen.querySelectorAll("td");
+      const result = {};
+      headers.forEach((h, i) => {
+        const cell = cells[i];
+        if (!cell) { result[h] = ""; return; }
+        const input = cell.querySelector("input");
+        result[h] = (input ? input.value : cell.textContent).trim();
+      });
+      return result;
+    }
+
+    // Allergies card (MUI data grid) — can list zero, one, or many allergens.
+    function getAllergies() {
+      const header = Array.from(document.querySelectorAll(".MuiCardHeader-title")).find(
+        (h) => h.textContent.trim() === "Allergies"
+      );
+      if (!header) return [];
+      const card = header.closest(".MuiPaper-root");
+      if (!card) return [];
+      const cells = card.querySelectorAll('[data-field="allergen"]');
+      return Array.from(cells)
+        .map((c) => {
+          const content = c.querySelector(".MuiDataGrid-cellContent");
+          return (content ? content.textContent : c.textContent).trim();
+        })
+        .filter(Boolean);
+    }
+
     // Oral Medication card can have zero, one, or many rows (one per med given).
     function getOralMedications() {
       const card = Array.from(document.querySelectorAll("md-card")).find((c) => {
@@ -781,11 +835,60 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
 
     const narrativeEntries = getNarrativeEntries();
 
-    const prepMed = text(document.querySelector("med-prep h2.flex"));
-    const prepVial = text(document.querySelector("med-prep td.md-cell:nth-of-type(2)"));
-    const prepNDC = text(document.querySelector('med-prep td[ng-if*="multiMed"]'));
-    const prepLot = text(document.querySelector('med-prep td[ng-if*="isPharmacyPrepared"]'));
-    const prepExp = text(document.querySelector("med-prep td:nth-of-type(5)"));
+    const allergies = getAllergies().join(", ");
+
+    // An appointment can prep multiple medications, each its own <med-prep>
+    // component with its own vial / Diluent Selection / Mixed In tables.
+    // Read every <med-prep> block and keep values positionally aligned
+    // across medications (position 1 = med #1 everywhere, etc.).
+    const medPrepEls = Array.from(document.querySelectorAll("med-prep"));
+
+    const preps = medPrepEls.map((medPrepEl) => {
+      const prepTables = medPrepEl.querySelectorAll("table.light-table");
+      const mainPrepRow = getPrepTableRow(prepTables[0]);
+      const diluentRow = getPrepTableRow(prepTables[1]);
+      const mixedInRow = getPrepTableRow(prepTables[2]);
+
+      return {
+        prepMed: text(medPrepEl.querySelector("h2.flex")),
+        medicationType: text(medPrepEl.querySelector("span.chip.specialty")),
+        prepQty: mainPrepRow["Qty"] || "",
+        prepVial: mainPrepRow["Vial"] || "",
+        prepNDC: mainPrepRow["NDC"] || "",
+        prepLot: mainPrepRow["Lot"] || "",
+        prepExp: mainPrepRow["Exp"] || "",
+        prepDiluentQty: diluentRow["Qty"] || "",
+        prepDiluent: diluentRow["Diluent"] || "",
+        prepDiluentNDC: diluentRow["NDC"] || "",
+        prepDiluentLot: diluentRow["Lot"] || "",
+        prepDiluentExp: diluentRow["Exp"] || "",
+        prepMixedInQty: mixedInRow["Qty"] || "",
+        prepMixedInFluid: mixedInRow["Fluid"] || "",
+        prepMixedInNDC: mixedInRow["NDC"] || "",
+        prepMixedInLot: mixedInRow["Lot"] || "",
+        prepMixedInExp: mixedInRow["Exp"] || "",
+      };
+    });
+
+    const joinPreps = (key) => preps.map((p) => p[key]).filter((v) => v !== "").join(", ");
+
+    const prepMed = joinPreps("prepMed");
+    const medicationType = joinPreps("medicationType");
+    const prepQty = joinPreps("prepQty");
+    const prepVial = joinPreps("prepVial");
+    const prepNDC = joinPreps("prepNDC");
+    const prepLot = joinPreps("prepLot");
+    const prepExp = joinPreps("prepExp");
+    const prepDiluentQty = joinPreps("prepDiluentQty");
+    const prepDiluent = joinPreps("prepDiluent");
+    const prepDiluentNDC = joinPreps("prepDiluentNDC");
+    const prepDiluentLot = joinPreps("prepDiluentLot");
+    const prepDiluentExp = joinPreps("prepDiluentExp");
+    const prepMixedInQty = joinPreps("prepMixedInQty");
+    const prepMixedInFluid = joinPreps("prepMixedInFluid");
+    const prepMixedInNDC = joinPreps("prepMixedInNDC");
+    const prepMixedInLot = joinPreps("prepMixedInLot");
+    const prepMixedInExp = joinPreps("prepMixedInExp");
 
     return {
       supervisingProvider, orderNumber, orderingProvider, orderDate, orderExpires,
@@ -809,8 +912,10 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
       flushLot: rowCell(flushRow, 2), flushQty: rowCell(flushRow, 3),
       adminStart, adminStop, adminRate, infusionDuration,
       departTime, departTemp, departBP, departHR, departR, departSpO2,
-      departInitials, timeInOffice, departureTime,
+      departInitials, timeInOffice, departureTime, allergies, medicationType,
       prepMed, prepVial, prepNDC, prepLot, prepExp,
+      prepDiluentQty, prepDiluent, prepDiluentNDC, prepDiluentLot, prepDiluentExp,
+      prepMixedInQty, prepMixedInFluid, prepMixedInNDC, prepMixedInLot, prepMixedInExp,
       omTime: oralMeds.map((m) => m.time).filter(Boolean).join(", "),
       omMedication: oralMeds.map((m) => m.medication).filter(Boolean).join(", "),
       omDosage: oralMeds.map((m) => m.dosage).filter(Boolean).join(", "),
@@ -893,11 +998,24 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
     departSpO2: data.departSpO2,
     departInitials: data.departInitials,
     timeInOffice: data.timeInOffice,
+    allergies: data.allergies,
+    medicationType: data.medicationType,
     prepMed: data.prepMed,
+    prepQty: data.prepQty,
     prepVial: data.prepVial,
     prepNDC: data.prepNDC,
     prepLot: data.prepLot,
     prepExp: data.prepExp,
+    prepDiluentQty: data.prepDiluentQty,
+    prepDiluent: data.prepDiluent,
+    prepDiluentNDC: data.prepDiluentNDC,
+    prepDiluentLot: data.prepDiluentLot,
+    prepDiluentExp: data.prepDiluentExp,
+    prepMixedInQty: data.prepMixedInQty,
+    prepMixedInFluid: data.prepMixedInFluid,
+    prepMixedInNDC: data.prepMixedInNDC,
+    prepMixedInLot: data.prepMixedInLot,
+    prepMixedInExp: data.prepMixedInExp,
     omTime: data.omTime,
     omMedication: data.omMedication,
     omDosage: data.omDosage,
