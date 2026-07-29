@@ -653,6 +653,57 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
       return text(row.querySelectorAll("td")[index]);
     }
 
+    // Oral Medication card can have zero, one, or many rows (one per med given).
+    function getOralMedications() {
+      const card = Array.from(document.querySelectorAll("md-card")).find((c) => {
+        const h2 = c.querySelector("h2");
+        return h2 && h2.textContent.includes("Oral Medication");
+      });
+      if (!card) return [];
+      const rows = card.querySelectorAll("tbody tr");
+      return Array.from(rows).map((row) => {
+        const cells = row.querySelectorAll("td");
+        return {
+          time: text(cells[0]),
+          medication: text(cells[1]),
+          dosage: text(cells[2]),
+          qty: text(cells[3]),
+          lot: text(cells[4]),
+          expiration: text(cells[5]),
+          administered: text(cells[6]),
+        };
+      });
+    }
+
+    // Narrative log (MUI data grid) can have zero, one, or many entries.
+    function getNarrativeEntries() {
+      const grid = document.querySelector(
+        "treatment-narrative-log-react [role='grid']"
+      );
+      if (!grid) return [];
+      const rows = grid.querySelectorAll("[role='row'][data-rowindex]");
+      return Array.from(rows).map((row) => {
+        const userSpan = row.querySelector('[data-field="createdByUserName"] span');
+        const narrativeSpan = row.querySelector('[data-field="narrative"] span');
+        const createdSpan = row.querySelector('[data-field="createdAt"] span');
+        const updatedSpan = row.querySelector('[data-field="updatedAt"] span');
+
+        const createdDate = createdSpan ? createdSpan.textContent.trim() : "";
+        const createdTime = createdSpan ? createdSpan.getAttribute("aria-label") || "" : "";
+        const updatedDate = updatedSpan ? updatedSpan.textContent.trim() : "";
+        const updatedTime = updatedSpan ? updatedSpan.getAttribute("aria-label") || "" : "";
+
+        return {
+          user: userSpan
+            ? (userSpan.getAttribute("aria-label") || userSpan.textContent).trim()
+            : "",
+          narrative: narrativeSpan ? narrativeSpan.textContent.trim() : "",
+          created: [createdDate, createdTime].filter(Boolean).join(" "),
+          updated: [updatedDate, updatedTime].filter(Boolean).join(" "),
+        };
+      });
+    }
+
     const orderSummary = document.querySelector("order-summary");
 
     const supervisingProvider = text(
@@ -699,6 +750,7 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
     const pivRow = getTabPanelRow("PIV");
     const piccRow = getTabPanelRow("PICC/CVC");
     const portRow = getTabPanelRow("PORT");
+    const oralMeds = getOralMedications();
 
     const flushCard = Array.from(document.querySelectorAll("md-card")).find((c) => {
       const h2 = c.querySelector("h2");
@@ -718,11 +770,16 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
 
     const departRow = document.querySelector('treatment-vital[type="departure"] tbody tr');
     const departTime = rowCell(departRow, 0);
+    const departTemp = rowCell(departRow, 1);
     const departBP = rowCell(departRow, 2);
     const departHR = rowCell(departRow, 3);
+    const departR = rowCell(departRow, 4);
     const departSpO2 = rowCell(departRow, 5);
+    const departInitials = rowCell(departRow, 6);
     const timeInOffice = getDtBeforeDdText("Time in Office");
     const departureTime = val(document.querySelector('input[name="departureTime"]'));
+
+    const narrativeEntries = getNarrativeEntries();
 
     const prepMed = text(document.querySelector("med-prep h2.flex"));
     const prepVial = text(document.querySelector("med-prep td.md-cell:nth-of-type(2)"));
@@ -749,13 +806,24 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
       portBloodReturn: rowCell(portRow, 4), portFlushOk: rowCell(portRow, 5),
       portLastDressingChange: rowCell(portRow, 6), portMaintToday: rowCell(portRow, 7),
       flushTime: rowCell(flushRow, 0), flushType: rowCell(flushRow, 1),
-      flushQty: rowCell(flushRow, 3),
+      flushLot: rowCell(flushRow, 2), flushQty: rowCell(flushRow, 3),
       adminStart, adminStop, adminRate, infusionDuration,
-      departTime, departBP, departHR, departSpO2, timeInOffice, departureTime,
+      departTime, departTemp, departBP, departHR, departR, departSpO2,
+      departInitials, timeInOffice, departureTime,
       prepMed, prepVial, prepNDC, prepLot, prepExp,
+      omTime: oralMeds.map((m) => m.time).filter(Boolean).join(", "),
+      omMedication: oralMeds.map((m) => m.medication).filter(Boolean).join(", "),
+      omDosage: oralMeds.map((m) => m.dosage).filter(Boolean).join(", "),
+      omQty: oralMeds.map((m) => m.qty).filter(Boolean).join(", "),
+      omLot: oralMeds.map((m) => m.lot).filter(Boolean).join(", "),
+      omExpiration: oralMeds.map((m) => m.expiration).filter(Boolean).join(", "),
+      omAdministered: oralMeds.map((m) => m.administered).filter(Boolean).join(", "),
+      narrativeUser: narrativeEntries.map((n, i) => `(${i + 1}) ${n.user}`).join(" | "),
+      narrativeText: narrativeEntries.map((n, i) => `(${i + 1}) ${n.narrative}`).join(" | "),
+      narrativeCreated: narrativeEntries.map((n, i) => `(${i + 1}) ${n.created}`).join(" | "),
+      narrativeUpdated: narrativeEntries.map((n, i) => `(${i + 1}) ${n.updated}`).join(" | "),
     };
   });
-
   return {
     patientId,
     appointmentId,
@@ -810,6 +878,7 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
     portMaintToday: data.portMaintToday,
     flushTime: data.flushTime,
     flushType: data.flushType,
+    flushLot: data.flushLot,
     flushQty: data.flushQty,
     adminStart: data.adminStart,
     adminStop: data.adminStop,
@@ -817,14 +886,28 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
     infusionDuration: data.infusionDuration,
     departureTime: data.departureTime,
     departTime: data.departTime,
+    departTemp: data.departTemp,
     departBP: data.departBP,
     departHR: data.departHR,
+    departR: data.departR,
     departSpO2: data.departSpO2,
+    departInitials: data.departInitials,
     timeInOffice: data.timeInOffice,
     prepMed: data.prepMed,
     prepVial: data.prepVial,
     prepNDC: data.prepNDC,
     prepLot: data.prepLot,
     prepExp: data.prepExp,
+    omTime: data.omTime,
+    omMedication: data.omMedication,
+    omDosage: data.omDosage,
+    omQty: data.omQty,
+    omLot: data.omLot,
+    omExpiration: data.omExpiration,
+    omAdministered: data.omAdministered,
+    narrativeUser: data.narrativeUser,
+    narrativeText: data.narrativeText,
+    narrativeCreated: data.narrativeCreated,
+    narrativeUpdated: data.narrativeUpdated,
   };
 }
