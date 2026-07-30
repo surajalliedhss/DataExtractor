@@ -282,11 +282,43 @@ export async function updateTreatmentNotesExcel(notes, outputDir = "./downloads"
         existingKeys.add(`${row.getCell(1).value}|${row.getCell(2).value}`);
     });
 
+    function ensureColumns(sheet, headers) {
+        const headerRow = sheet.getRow(1);
+        const colMap = new Map();
+
+        headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+            colMap.set(String(cell.value), colNumber);
+        });
+
+        let nextCol = headerRow.cellCount + 1;
+
+        for (const header of headers) {
+            if (!colMap.has(header)) {
+                sheet.getColumn(nextCol).width = 24;
+                const cell = headerRow.getCell(nextCol);
+                cell.value = header;
+                cell.font = { bold: true };
+                colMap.set(header, nextCol);
+                nextCol++;
+            }
+        }
+        return colMap;
+    }
+
     let added = 0;
     for (const note of notes) {
         const key = `${note.patientId}|${note.appointmentId}`;
         if (existingKeys.has(key)) continue;
-        sheet.addRow(note);
+
+        const { assessment = {}, ...fixedFields } = note;
+
+        const row = sheet.addRow(fixedFields);
+
+        const colMap = ensureColumns(sheet, Object.keys(assessment));
+        for (const [header, value] of Object.entries(assessment)) {
+            row.getCell(colMap.get(header)).value = value;
+        }
+
         added++;
     }
 

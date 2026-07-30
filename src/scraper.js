@@ -929,6 +929,8 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
       narrativeUpdated: narrativeEntries.map((n, i) => `(${i + 1}) ${n.updated}`).join(" | "),
     };
   });
+  const assessmentRaw = await scrapeAssessment(page);
+  const assessment = flattenAssessment(assessmentRaw);
   return {
     patientId,
     appointmentId,
@@ -1027,5 +1029,75 @@ export async function scrapeTreatmentNote(page, patientId, appointmentUrl, baseU
     narrativeText: data.narrativeText,
     narrativeCreated: data.narrativeCreated,
     narrativeUpdated: data.narrativeUpdated,
+    assessment,
   };
+}
+
+export async function scrapeAssessment(page) {
+  const assessmentRoot = page.locator("assessment").first();
+  if ((await assessmentRoot.count()) === 0) {
+    return { noAssessmentToday: false, sections: [] };
+  }
+
+  const noAssessmentSwitch = assessmentRoot.locator(
+    'md-switch[aria-label="No Assessment Today"]'
+  );
+  let noAssessmentToday = false;
+  if ((await noAssessmentSwitch.count()) > 0) {
+    noAssessmentToday =
+      (await noAssessmentSwitch.getAttribute("aria-checked")) === "true";
+  }
+
+  if (noAssessmentToday) {
+    return { noAssessmentToday: true, sections: [] };
+  }
+
+  const sections = await page.evaluate(() => {
+    const root = document.querySelector("assessment");
+    if (!root) return [];
+
+    // Only the real Q&A cards, not the summary grid-tile overview card.
+    const sectionCards = Array.from(
+      root.querySelectorAll('md-card[ng-repeat="section in vm.assessment.sections"]')
+    );
+
+    return sectionCards.map((card) => {
+      const sectionName = (card.querySelector("md-toolbar h2")?.textContent || "").trim();
+
+      const rows = Array.from(card.querySelectorAll("div.assessment-item"));
+      const questions = rows.map((row) => {
+        const question = (row.querySelector("label")?.textContent || "").trim();
+        const explanation = (row.querySelector("textarea")?.value || "").trim();
+
+        let answer = "";
+        const checkedRadio = row.querySelector("md-radio-button.md-checked");
+        if (checkedRadio) {
+          answer = checkedRadio.getAttribute("aria-label") || checkedRadio.getAttribute("value") || "";
+        } else {
+          // covers question.questionType == 'select'
+          const selectText = row.querySelector("md-select .md-text");
+          if (selectText) answer = selectText.textContent.trim();
+        }
+
+        return { question, answer, explanation };
+      });
+
+      return { section: sectionName, questions };
+    });
+  });
+
+  return { noAssessmentToday: false, sections };
+}
+
+export function flattenAssessment({ noAssessmentToday, sections }) {
+  const flat = { "Assessment - No Assessment Today": noAssessmentToday ? "Yes" : "No" };
+
+  for (const { section, questions } of sections) {
+    for (const { question, answer, explanation } of questions) {
+      if (!question) continue;
+      const header = `Assessment - ${section} - ${question}`;
+      flat[header] = explanation ? `${answer} (${explanation})` : answer;
+    }
+  }
+  return flat;
 }
