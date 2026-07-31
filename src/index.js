@@ -12,6 +12,7 @@ import {
   scrapeAndDownloadDocuments,
   scrapeCompletedAppointmentUrls,
   scrapeTreatmentNote,
+  getPatientDisplayId,
 } from "./scraper.js";
 import { createOrdersExcel, updateDocumentsExcel, updateTreatmentNotesExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
@@ -76,23 +77,21 @@ async function run() {
     }
 
     console.log(`[${processed + 1}/${PATIENT_LIMIT}] Processing patient ${patient.patientId}...`);
-
+    let displayId = patient.patientId;
     try {
       await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+      displayId = (await getPatientDisplayId(page)) ?? patient.patientId;
       await navigateToOrdersTab(page);
-
       const orders = await downloadOrderImage(page, process.env.APP_URL, ORDERS_DIR);
 
       if (orders.length > 0) {
         for (const order of orders) {
-          const entry = { ...order, patientId: patient.patientId };
-          console.log("Pushing order entry:", entry);
+          const entry = { ...order, patientId: displayId };   // was patient.patientId
           allOrders.push(entry);
         }
       } else {
-        console.log("No orders found for this patient.");
         allOrders.push({
-          patientId: patient.patientId,
+          patientId: displayId,
           orderId: `patient-${patient.patientId}`,
           route: "",
           schedule: "",
@@ -104,6 +103,7 @@ async function run() {
       await page.goto(patient.url, { waitUntil: "domcontentloaded" });
       await navigateToDocumentsTab(page);
       const docs = await scrapeAndDownloadDocuments(page, patient.patientId, DOCUMENTS_DIR);
+      docs.forEach(d => { d.patientId = displayId; }); 
       allDocuments.push(...docs);
       console.log(`Documents scraped for patient ${patient.patientId}: ${docs.length} found.`);
       // ---------------------------
@@ -132,7 +132,8 @@ async function run() {
     for (const appt of completedAppts) {
       try {
         const note = await scrapeTreatmentNote(page, patient.patientId, appt.url, process.env.APP_URL);
-        note.appointmentDate = appt.date; // use the date from the appointments list
+        note.appointmentDate = appt.date;
+        note.patientId = displayId;
         allTreatmentNotes.push(note);
         console.log(`Treatment note scraped: appointment ${note.appointmentId} (${appt.date})`);
       } catch (err) {

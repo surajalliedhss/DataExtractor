@@ -1101,3 +1101,14 @@ export function flattenAssessment({ noAssessmentToday, sections }) {
   }
   return flat;
 }
+
+export async function getPatientDisplayId(page) {
+  const el = page.locator('div.MuiBox-root:has-text("Patient ID:")').first();
+  try {
+    await el.waitFor({ state: "visible", timeout: 10000 });
+  } catch {
+    return null;
+  }
+  const text = await el.innerText();
+  return text.replace("Patient ID:", "").trim();
+}
