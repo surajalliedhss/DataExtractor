@@ -13,6 +13,9 @@ import {
   scrapeCompletedAppointmentUrls,
   scrapeTreatmentNote,
   getPatientDisplayId,
+  navigateToWeightHeightTab,
+  scrapeWeightHeight,
+  selectLocation,
 } from "./scraper.js";
 import { createOrdersExcel, updateDocumentsExcel, updateTreatmentNotesExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
@@ -54,6 +57,7 @@ async function run() {
   const allOrders = [];
   const allDocuments = [];
   const allTreatmentNotes = [];
+  await selectLocation(page, process.env.LOCATION_NAME);
   await navigateToPatients(page);
 
   const patients = await getAllPatientsByStatus(
@@ -81,12 +85,23 @@ async function run() {
     try {
       await page.goto(patient.url, { waitUntil: "domcontentloaded" });
       displayId = (await getPatientDisplayId(page)) ?? patient.patientId;
+      await navigateToWeightHeightTab(page);
+      const weightHeight = await scrapeWeightHeight(page);
       await navigateToOrdersTab(page);
+      console.log(
+        "Order cards:",
+        await page.locator("order-detail-react").count()
+      );
+
+      console.log(
+        "View Order buttons:",
+        await page.locator('button[aria-label="view order image"]').count()
+      );
       const orders = await downloadOrderImage(page, process.env.APP_URL, ORDERS_DIR);
 
       if (orders.length > 0) {
         for (const order of orders) {
-          const entry = { ...order, patientId: displayId };   // was patient.patientId
+          const entry = { ...order, ...weightHeight, patientId: displayId };   // was patient.patientId
           allOrders.push(entry);
         }
       } else {
@@ -95,6 +110,10 @@ async function run() {
           orderId: `patient-${patient.patientId}`,
           route: "",
           schedule: "",
+          weightLbs: weightHeight.weightLbs,
+          weightKgs: weightHeight.weightKgs,
+          heightIn: weightHeight.heightIn,
+          heightCm: weightHeight.heightCm,
           downloadStatus: "No Orders Found",
         });
       }
@@ -114,7 +133,7 @@ async function run() {
     } catch (err) {
       console.error(`Error processing patient ${patient.patientId}:`, err.message);
       allOrders.push({
-        patientId: patient.patientId,
+        patientId: displayId,
         orderId: `patient-${patient.patientId}`,
         route: "",
         schedule: "",

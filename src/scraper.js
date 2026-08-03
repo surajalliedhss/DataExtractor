@@ -141,7 +141,38 @@ export async function getAllPatientsByStatus(page, baseUrl, status) {
 
 
 export async function navigateToOrdersTab(page) {
-  await page.locator('md-tab-item:has(span:text("Orders"))').click();
+  const ordersTab = page.locator(
+    'md-tab-item:has(span:text("Orders"))'
+  );
+
+  // Bring the tab into view if it is paginated
+  let attempts = 0;
+
+  while (!(await ordersTab.isVisible())) {
+    const nextBtn = page.locator(
+      'md-next-button[aria-label="Next Page"]'
+    );
+
+    if ((await nextBtn.count()) === 0) break;
+
+    await nextBtn.click();
+    await page.waitForTimeout(400);
+
+    if (++attempts > 5) break;
+  }
+
+  await ordersTab.click();
+
+  // Wait until the Orders content has loaded
+  await page
+    .locator("order-detail-react")
+    .first()
+    .waitFor({
+      state: "attached",
+      timeout: 15000,
+    })
+    .catch(() => { });
+
   await page.waitForTimeout(1000);
 }
 
@@ -248,7 +279,15 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
 
   const orderCard = page.locator("order-detail-react").first();
   const cardCount = await orderCard.count();
+  console.log(
+    "downloadOrderImage() -> order-detail-react:",
+    await page.locator("order-detail-react").count()
+  );
 
+  console.log(
+    "downloadOrderImage() -> view buttons:",
+    await page.locator('button[aria-label="view order image"]').count()
+  );
   if (cardCount > 0) {
     const fileBtn = page.locator('button[aria-label="view order image"]').first();
     const detailBtn = page.locator('button[aria-label="go to order detail"]').first();
@@ -1111,4 +1150,141 @@ export async function getPatientDisplayId(page) {
   }
   const text = await el.innerText();
   return text.replace("Patient ID:", "").trim();
+}
+
+export async function selectLocation(page, locationName) {
+  if (!locationName) return;
+
+  console.log(`Selecting location: ${locationName}`);
+
+  await page.waitForLoadState("networkidle");
+
+  // Current location in header
+  const currentLocation = page.locator(
+    'div[data-testid="location"][aria-label="Change Location"]'
+  );
+
+  await currentLocation.waitFor({
+    state: "visible",
+    timeout: 30000,
+  });
+
+  const current = (await currentLocation.innerText())
+    .replace("@", "")
+    .trim();
+
+  console.log("Current location:", current);
+
+  if (current === locationName) {
+    console.log("Already using correct location.");
+    return;
+  }
+
+  // Open Change Location dialog
+  await currentLocation.click();
+
+  // Wait for autocomplete
+  const input = page.locator("#select-location-autocomplete");
+
+  await input.waitFor({
+    state: "visible",
+    timeout: 15000,
+  });
+
+  await input.click();
+  await input.fill("");
+
+  await input.type(locationName, {
+    delay: 40,
+  });
+
+  // Wait for dropdown
+  const option = page.locator("li[role='option']").filter({
+    hasText: locationName,
+  }).first();
+
+  await option.waitFor({
+    state: "visible",
+    timeout: 10000,
+  });
+
+  await option.click();
+
+  // Click GO button
+  const goButton = page.locator('button[aria-label="go"]');
+
+  await goButton.waitFor({
+    state: "visible",
+    timeout: 10000,
+  });
+
+  await goButton.click();
+
+  // Wait until dialog closes
+  await page.waitForSelector("#select-location-autocomplete", {
+    state: "hidden",
+    timeout: 30000,
+  });
+
+  // Wait for location to update
+  await page.waitForFunction(
+    (expected) => {
+      const el = document.querySelector(
+        'div[data-testid="location"]'
+      );
+      return (
+        el &&
+        el.textContent.replace("@", "").trim() === expected
+      );
+    },
+    locationName,
+    { timeout: 30000 }
+  );
+
+  console.log("Location changed successfully.");
+}
+
+export async function navigateToWeightHeightTab(page) {
+  const tab = page.locator(
+    'md-tab-item:has(span:text("Weight/Height"))'
+  );
+
+  // If tab is hidden, click next tab button until visible
+  let attempts = 0;
+  while (!(await tab.isVisible())) {
+    const nextBtn = page.locator(
+      'md-next-button[aria-label="Next Page"]'
+    );
+
+    if ((await nextBtn.count()) === 0) break;
+
+    await nextBtn.click();
+    await page.waitForTimeout(400);
+
+    if (++attempts > 5) break;
+  }
+
+  await tab.click();
+  await page.waitForTimeout(1500);
+}
+
+export async function scrapeWeightHeight(page) {
+
+  const getValueByLabel = async (label) => {
+
+    const input = page.locator(
+      `label:has-text("${label}")`
+    )
+      .locator("..")
+      .locator("input");
+
+    return await input.inputValue();
+  };
+
+  return {
+    weightLbs: await getValueByLabel("Patient Weight (lbs)"),
+    weightKgs: await getValueByLabel("Patient Weight (kgs)"),
+    heightIn: await getValueByLabel("Patient Height (in)"),
+    heightCm: await getValueByLabel("Patient Height (cm)")
+  };
 }

@@ -45,6 +45,10 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
             { header: "ReferralTreatments", key: "referralTreatments", width: 22 },
             { header: "Approved Treatments", key: "approvedTreatments", width: 22 },
             { header: "Treatments Remaining", key: "treatmentsRemaining", width: 22 },
+            { header: "Weight (lbs)", key: "weightLbs", width: 15 },
+            { header: "Weight (kgs)", key: "weightKgs", width: 15 },
+            { header: "Height (in)", key: "heightIn", width: 15 },
+            { header: "Height (cm)", key: "heightCm", width: 15 },
         ];
 
         sheet.getRow(1).font = { bold: true };
@@ -86,6 +90,10 @@ export async function createOrdersExcel(orders, outputDir = "./downloads") {
             referralTreatments: order.referralTreatments ?? "",
             approvedTreatments: order.approvedTreatments ?? "",
             treatmentsRemaining: order.treatmentsRemaining ?? "",
+            weightLbs: order.weightLbs ?? "",
+            weightKgs: order.weightKgs ?? "",
+            heightIn: order.heightIn ?? "",
+            heightCm: order.heightCm ?? "",
         });
 
 
