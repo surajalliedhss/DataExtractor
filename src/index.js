@@ -20,12 +20,12 @@ import {
 } from "./scraper.js";
 import { createOrdersExcel, updateDocumentsExcel, updateTreatmentNotesExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
-import { withTimeout, retryOnce } from "./utils.js";
+import { withTimeout } from "./utils.js"; // only used for the short per-step timeouts inside processPatient now
 import path from "path";
 
 const TAB_TIMEOUT = 30000;      // per navigation/scrape step
-const PATIENT_TIMEOUT = 120000; // hard cap per patient, covers the retry tooimport { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
-
+const PATIENT_TIMEOUT = 120000; // hard cap per patient — enforced by force-closing the page, see processPatientWithRecovery
+const sessionFile = "session.json";
 dotenv.config();
 
 async function processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
@@ -99,6 +99,13 @@ async function processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
       note.patientId = displayId;
       treatmentNotes.push(note);
     } catch (err) {
+      // NOTE: this catch swallows the error on purpose (one bad appointment
+      // note shouldn't sink the whole patient) — but that means if the page
+      // gets force-closed mid-loop by processPatientWithRecovery's deadline
+      // timer, every remaining appointment fails near-instantly here and
+      // this function can still return "successfully" with partial data.
+      // processPatientWithRecovery checks for that explicitly — see
+      // `deadlineHit` there — so it isn't mistaken for a real success.
       console.warn(`Failed to scrape treatment note ${appt.url}:`, err.message);
     }
   }
@@ -106,19 +113,110 @@ async function processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
   return { displayId, orders, documents, treatmentNotes };
 }
 
+// Closes a page defensively: safe to call on an already-closed page, and
+// bounded in case close() itself hangs.
+async function safeClose(page, timeoutMs = 5000) {
+  if (!page || page.isClosed()) return;
+  await Promise.race([
+    page.close({ runBeforeUnload: false }).catch(() => { }),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+// Opens a brand-new tab, points it at the app, and re-selects the clinic
+// location so the tab is in a known-good state before anything else touches
+// it. Only called when we actually suspect the previous page is poisoned —
+// NOT on every patient — so this stays cheap in the common case.
+async function recoverPage(context, oldPage, reason) {
+  console.warn(`Recovering a fresh page (reason: ${reason})`);
+  await safeClose(oldPage);
+
+  const newPage = await context.newPage();
+  await newPage.goto(process.env.APP_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  if (newPage.url().includes("/login") || newPage.url().includes("/authorize")) {
+    console.warn("Session appears invalid — re-authenticating");
+    await login(newPage, process.env.APP_URL);
+    await context.storageState({ path: sessionFile }); // refresh saved session
+  }
+  await selectLocation(newPage, process.env.LOCATION_NAME);
+
+  // Let the app settle after the location switch before handing the page
+  // back, so the very next navigation isn't racing whatever the location
+  // change is still doing client-side. networkidle can legitimately never
+  // fire on apps with polling/websockets, so this is bounded and non-fatal.
+  await newPage.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => { });
+  await newPage.waitForTimeout(1000);
+
+  return newPage;
+}
+
+// Tries a patient once on the given page; on failure, recovers a fresh page
+// and tries exactly once more. The whole attempt (both tries, including
+// recovery) is bounded by PATIENT_TIMEOUT — but the deadline is owned BY
+// this function, not by an outer Promise.race. When it fires, it
+// force-closes whichever page is currently in use. That's real
+// cancellation: Playwright rejects any in-flight action on a closed page
+// almost immediately, instead of a promise nobody's awaiting anymore
+// quietly running to completion in the background. Nothing from this
+// patient can still be alive by the time this function settles, so nothing
+// from patient A can reach forward and touch patient B's page.
+async function processPatientWithRecovery(context, page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
+  let currentPage = page;
+  let deadlineHit = false;
+
+  const deadlineTimer = setTimeout(() => {
+    deadlineHit = true;
+    console.warn(
+      `patient ${patient.patientId} hit the ${PATIENT_TIMEOUT}ms overall deadline — force-closing its page to cancel in-flight work`
+    );
+    safeClose(currentPage).catch(() => { });
+  }, PATIENT_TIMEOUT);
+
+  try {
+    try {
+      const result = await processPatient(currentPage, patient, ORDERS_DIR, DOCUMENTS_DIR);
+      if (deadlineHit) {
+        // processPatient can return "successfully" with partial data if the
+        // deadline fired mid-treatment-notes-loop (see the comment there) —
+        // treat that as a failure so the patient gets retried next run
+        // instead of silently marked done with incomplete data.
+        throw new Error(`exceeded ${PATIENT_TIMEOUT}ms overall deadline (page force-closed mid-run)`);
+      }
+      return { result, page: currentPage };
+    } catch (err) {
+      if (deadlineHit) throw err; // out of budget — don't burn more time on a retry that can't finish anyway
+      console.warn(`patient ${patient.patientId} failed once (${err.message}) — retrying...`);
+      currentPage = await recoverPage(context, currentPage, err.message);
+      const result = await processPatient(currentPage, patient, ORDERS_DIR, DOCUMENTS_DIR);
+      if (deadlineHit) {
+        throw new Error(`exceeded ${PATIENT_TIMEOUT}ms overall deadline during retry (page force-closed mid-run)`);
+      }
+      return { result, page: currentPage };
+    }
+  } finally {
+    // Critical: without this, a patient that finishes quickly leaves a live
+    // timer armed for the rest of the original 120s window. Since `page`
+    // usually carries over unchanged to the NEXT patient (no recovery
+    // needed), that stale timer could fire late and force-close patient B's
+    // page instead — reintroducing the exact cross-patient bug this is
+    // meant to fix. Clearing it here scopes the deadline to just this call.
+    clearTimeout(deadlineTimer);
+  }
+}
+
 async function run() {
   const PATIENT_LIMIT = parseInt(process.env.PATIENT_LIMIT ?? "20", 10);
   const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "./downloads";
   const ORDERS_DIR = path.join(DOWNLOAD_DIR, "orders");
   const DOCUMENTS_DIR = path.join(DOWNLOAD_DIR, "documents");
-  const sessionFile = "session.json";
+  // const sessionFile = "session.json";
   const hasSession = fs.existsSync(sessionFile);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     acceptDownloads: true,
     storageState: hasSession ? sessionFile : undefined,
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
 
   await page.goto(process.env.APP_URL, {
     waitUntil: "domcontentloaded",
@@ -155,7 +253,7 @@ async function run() {
   const patients = await getAllPatientsByStatus(
     page,
     process.env.APP_URL,
-    "New"
+    "New",
   );
 
   let processed = 0;
@@ -175,16 +273,20 @@ async function run() {
     console.log(`[${processed + 1}/${PATIENT_LIMIT}] Processing patient ${patient.patientId}...`);
 
     try {
-      // Whole patient (including the one retry) must finish inside 2 minutes,
-      // otherwise it's abandoned and we move on.
-      const result = await withTimeout(
-        retryOnce(
-          () => processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR),
-          `patient ${patient.patientId}`
-        ),
-        PATIENT_TIMEOUT,
-        `patient ${patient.patientId} (overall)`
+      // CHANGED: no outer withTimeout() here anymore. processPatientWithRecovery
+      // owns its own PATIENT_TIMEOUT deadline and enforces it by force-closing
+      // the page in use — real cancellation, not a race that just stops
+      // waiting. Reuses the SAME page across patients when nothing goes
+      // wrong (no per-patient page creation), and only recovers a fresh page
+      // when a patient actually fails or blows its deadline.
+      const { result, page: healthyPage } = await processPatientWithRecovery(
+        context,
+        page,
+        patient,
+        ORDERS_DIR,
+        DOCUMENTS_DIR
       );
+      page = healthyPage;
 
       // Keep running totals for the console summary only.
       allOrders.push(...result.orders);
@@ -222,15 +324,15 @@ async function run() {
       // Do NOT markPatientDone — leave it unmarked so the next run retries it.
       processed++;
 
-      // A timed-out step may leave the page mid-action (stuck click, open
-      // dialog, wrong tab). Reset to a known page before the next patient.
+      // `page` may already be closed (the deadline timer force-closes it on
+      // its way out), or still alive but left mid-action. Either way it's
+      // untrustworthy — recoverPage()/safeClose() handle an already-closed
+      // page fine, so this is safe to call unconditionally.
       try {
-        await page.goto(process.env.APP_URL, {
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        });
-      } catch (resetErr) {
-        console.warn("Page reset after failure also failed:", resetErr.message);
+        page = await recoverPage(context, page, err.message);
+      } catch (recoverErr) {
+        console.error("Failed to recover a fresh page — aborting run:", recoverErr.message);
+        throw recoverErr;
       }
     }
   }

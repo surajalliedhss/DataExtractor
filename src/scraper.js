@@ -8,19 +8,36 @@ function extractOrderId(url) {
 }
 
 async function getRouteAndSchedule(page) {
-  const routeEl = page.locator("td.order-medicine").nth(1);
-  const route =
-    (await routeEl.count()) > 0 ? (await routeEl.innerText()).trim() : "";
+  // Wait until the administration row is visible
+  await page.waitForSelector(
+    "section.order-summary-section tbody tr",
+    { state: "visible", timeout: 15000 }
+  );
 
-  const scheduleEl = page
-    .locator('tr[ng-repeat*="administrationDetails"] dosage-information-react span')
-    .first();
-  const schedule =
-    (await scheduleEl.count()) > 0
-      ? (await scheduleEl.innerText()).trim()
-      : "";
+  const firstRow = page.locator(
+    "section.order-summary-section tbody tr"
+  ).first();
 
-  return { route, schedule };
+  // Route = second td
+  const route = (
+    await firstRow.locator("td").nth(1).textContent()
+  )?.trim() || "";
+
+  // Schedule = third td
+  const schedule = (
+    await firstRow.locator("td").nth(2).textContent()
+  )?.replace(/\s+/g, " ")
+    .trim() || "";
+
+  console.log({
+    route,
+    schedule
+  });
+
+  return {
+    route,
+    schedule
+  };
 }
 
 export async function navigateToPatients(page) {
@@ -368,7 +385,13 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
       let route = "", schedule = "", referralData = {};
       if ((await detailBtn.count()) > 0) {
         await detailBtn.click();
-        await page.waitForTimeout(2000);
+        await page.waitForSelector(
+          "section.order-summary-section table tbody tr",
+          {
+            state: "visible",
+            timeout: 15000,
+          }
+        );
 
         const rs = await getRouteAndSchedule(page);
         route = rs.route;
