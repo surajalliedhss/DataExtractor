@@ -526,9 +526,6 @@ export async function scrapeAndDownloadDocuments(page, patientId, downloadDir = 
 
   const rows = page.locator('tbody[md-body] tr[md-row]');
   const count = await rows.count();
-  console.log("scrapeAndDownloadDocuments()");
-  console.log("Patient:", patientId);
-  console.log("Rows found:", count);
   if (count === 0) return results;
 
   for (let i = 0; i < count; i++) {

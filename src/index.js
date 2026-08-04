@@ -68,27 +68,13 @@ async function processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
 
   // ---- Documents ----
   await page.goto(patient.url, { waitUntil: "domcontentloaded" });
-  console.log("================================");
-  console.log("Patient:", patient.patientId);
-  console.log("URL:", page.url());
+
   await withTimeout(navigateToDocumentsTab(page), TAB_TIMEOUT, "navigateToDocumentsTab");
-  // ADD THIS
-  const rows = page.locator('tbody[md-body] tr[md-row]');
-
-  console.log("Rows on page:", await rows.count());
-
-  if (await rows.count() > 0) {
-    console.log(
-      "First description:",
-      await rows.nth(0).locator("td").nth(3).innerText()
-    );
-  }
   const docs = await withTimeout(
     scrapeAndDownloadDocuments(page, patient.patientId, DOCUMENTS_DIR),
     TAB_TIMEOUT,
     "scrapeAndDownloadDocuments"
   );
-  console.log("Docs returned:", docs.length);
 
   docs.forEach((d) => { d.patientId = displayId; });
   documents.push(...docs);

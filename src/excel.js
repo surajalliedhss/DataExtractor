@@ -213,12 +213,6 @@ export async function updateDocumentsExcel(documents, outputDir = "./downloads")
             col.width = columns[index].width;
         });
 
-        console.log(
-            sheet.columns.map(c => ({
-                header: c.header,
-                key: c.key
-            }))
-        );
     }
 
     const priorRowCount = sheet.rowCount > 1 ? sheet.rowCount - 1 : 0;
@@ -237,7 +231,6 @@ export async function updateDocumentsExcel(documents, outputDir = "./downloads")
     for (const doc of documents) {
         const key = `${doc.patientId}|${doc.receivedDate}|${doc.description}`;
         if (existingKeys.has(key)) { skippedDup++; continue; }
-        console.log("Adding document:", JSON.stringify(doc, null, 2));
         const row = sheet.addRow({
             patientId: doc.patientId,
             receivedDate: doc.receivedDate,
@@ -249,13 +242,6 @@ export async function updateDocumentsExcel(documents, outputDir = "./downloads")
             filename: doc.filename,
             downloadStatus: doc.downloadStatus,
         });
-        console.log(
-            "Written row:",
-            row.getCell(1).value,
-            row.getCell(2).value,
-            row.getCell(3).value,
-            row.getCell(5).value
-        );
         const color = STATUS_COLORS[doc.downloadStatus];
         if (color) {
             row.getCell(9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
