@@ -145,7 +145,6 @@ export async function navigateToOrdersTab(page) {
     'md-tab-item:has(span:text("Orders"))'
   );
 
-  // Bring the tab into view if it is paginated
   let attempts = 0;
 
   while (!(await ordersTab.isVisible())) {
@@ -163,15 +162,58 @@ export async function navigateToOrdersTab(page) {
 
   await ordersTab.click();
 
-  // Wait until the Orders content has loaded
-  await page
-    .locator("order-detail-react")
-    .first()
-    .waitFor({
-      state: "attached",
-      timeout: 15000,
-    })
-    .catch(() => { });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+
+    console.log(`Waiting for Orders page (attempt ${attempt})...`);
+
+    const loaded = await Promise.race([
+
+      // Current Orders component exists
+      page.locator("order-detail-react")
+        .waitFor({
+          state: "attached",
+          timeout: 15000,
+        })
+        .then(() => "current")
+        .catch(() => null),
+
+      // Previous Orders table exists
+      page.locator("header.app-subheader", {
+        hasText: "Previous Orders",
+      })
+        .waitFor({
+          state: "visible",
+          timeout: 15000,
+        })
+        .then(() => "previous")
+        .catch(() => null),
+
+      // Explicit No Active Orders message
+      page.getByText("No Active Orders")
+        .waitFor({
+          state: "visible",
+          timeout: 15000,
+        })
+        .then(() => "empty")
+        .catch(() => null)
+
+    ]);
+
+    if (loaded) {
+      console.log(`Orders page loaded (${loaded})`);
+      break;
+    }
+
+    if (attempt === 1) {
+      console.log("Orders page not ready. Clicking Orders tab again...");
+      await ordersTab.click();
+      await page.waitForTimeout(2000);
+    }
+
+    if (attempt === 2 && !loaded) {
+      throw new Error("Orders page failed to load");
+    }
+  }
 
   await page.waitForTimeout(1000);
 }
@@ -278,8 +320,17 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
   const results = [];
 
   const orderCard = page.locator("order-detail-react").first();
-  const cardCount = await orderCard.count();
-  console.log(
+  await page.waitForTimeout(1000);
+
+  let cardCount = await page.locator("order-detail-react").count();
+
+  if (cardCount === 0) {
+    console.log("No order cards yet, waiting another 3 seconds...");
+
+    await page.waitForTimeout(3000);
+
+    cardCount = await page.locator("order-detail-react").count();
+  }  console.log(
     "downloadOrderImage() -> order-detail-react:",
     await page.locator("order-detail-react").count()
   );
@@ -296,11 +347,15 @@ export async function downloadOrderImage(page, baseUrl, downloadDir = "./downloa
 
     if (fileBtnCount > 0 && isDisabled === null) {
       // Extract orderId from the card text before navigating
-      const orderText = await page
-        .locator("order-detail-react p.MuiTypography-body1")
-        .first()
-        .innerText({ timeout: 5000 })
-        .catch(() => "");
+      const orderTextLocator =
+        page.locator("order-detail-react p.MuiTypography-body1").first();
+
+      await orderTextLocator.waitFor({
+        state: "visible",
+        timeout: 15000,
+      });
+
+      const orderText = await orderTextLocator.innerText();
 
       const match = orderText.match(/#(\d+)/);
       const orderId = match ? match[1] : `unknown-${Date.now()}`;
@@ -348,7 +403,12 @@ export async function downloadPreviousOrders(
   const prevHeader = page.locator("header.app-subheader", {
     hasText: "Previous Orders",
   });
-  if ((await prevHeader.count()) === 0) return [];
+
+  await prevHeader.waitFor({ state: "visible", timeout: 5000 }).catch(() => { });
+
+  if ((await prevHeader.count()) === 0) {
+    return [];
+  }
 
   const arrowIcons = page.locator(
     'td.md-cell-icon md-icon[ui-sref^="order.show"]',
@@ -369,26 +429,31 @@ export async function downloadPreviousOrders(
   for (const orderUrl of hrefs) {
     const orderId = extractOrderId(orderUrl);
     const filepath = path.join(downloadDir, `${orderId}.pdf`);
+    const alreadyDownloaded = fs.existsSync(filepath);
 
-    if (fs.existsSync(filepath)) {
-      console.log(`Already downloaded, skipping: ${orderId}.pdf`);
-      results.push({ orderId, route: "", schedule: "", downloadStatus: "Already Downloaded" });
-      continue;
-    }
-
+    // Always visit the page — route/schedule/referral live here regardless
+    // of whether the PDF itself still needs downloading.
     await page.goto(orderUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);
 
-    const fileBtn = page.locator('button[aria-label="insert_drive_file"]');
-    if ((await fileBtn.getAttribute("disabled")) !== null) {
-      results.push({ orderId, route: "", schedule: "", downloadStatus: "Skipped (no image)" });
+    const { route, schedule } = await getRouteAndSchedule(page);
+    const referralData = await getReferralData(page);
+
+    if (alreadyDownloaded) {
+      console.log(`PDF already downloaded, skipping download: ${orderId}.pdf (route/schedule/referral still scraped)`);
+      results.push({ orderId, route, schedule, downloadStatus: "Already Downloaded", ...referralData });
       continue;
     }
 
-    const { route, schedule } = await getRouteAndSchedule(page);
+    const fileBtn = page.locator('button[aria-label="insert_drive_file"]');
+    if ((await fileBtn.getAttribute("disabled")) !== null) {
+      results.push({ orderId, route, schedule, downloadStatus: "Skipped (no image)", ...referralData });
+      continue;
+    }
+
     const downloadStatus = await downloadOrderImageFromButton(page, fileBtn, downloadDir, orderId);
 
-    results.push({ orderId, route, schedule, downloadStatus });
+    results.push({ orderId, route, schedule, downloadStatus, ...referralData });
   }
 
   return results;
@@ -445,7 +510,11 @@ export async function navigateToDocumentsTab(page) {
   }
 
   await docTab.click();
-  await page.waitForTimeout(1000);
+
+  await page.waitForFunction(() => {
+    const rows = document.querySelectorAll("tbody[md-body] tr[md-row]");
+    return rows.length > 0;
+  }, { timeout: 10000 });
 }
 
 export async function scrapeAndDownloadDocuments(page, patientId, downloadDir = "./downloads/documents") {
@@ -457,6 +526,9 @@ export async function scrapeAndDownloadDocuments(page, patientId, downloadDir = 
 
   const rows = page.locator('tbody[md-body] tr[md-row]');
   const count = await rows.count();
+  console.log("scrapeAndDownloadDocuments()");
+  console.log("Patient:", patientId);
+  console.log("Rows found:", count);
   if (count === 0) return results;
 
   for (let i = 0; i < count; i++) {

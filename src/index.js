@@ -1,3 +1,4 @@
+console.log("cwd =", process.cwd());
 import { chromium } from "playwright";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -19,9 +20,105 @@ import {
 } from "./scraper.js";
 import { createOrdersExcel, updateDocumentsExcel, updateTreatmentNotesExcel } from "./excel.js";
 import { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
+import { withTimeout, retryOnce } from "./utils.js";
 import path from "path";
 
+const TAB_TIMEOUT = 30000;      // per navigation/scrape step
+const PATIENT_TIMEOUT = 120000; // hard cap per patient, covers the retry tooimport { loadCheckpoint, markPatientDone, isPatientDone } from "./checkpoint.js";
+
 dotenv.config();
+
+async function processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR) {
+  const orders = [];
+  const documents = [];
+  const treatmentNotes = [];
+
+  await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+  const displayId =
+    (await withTimeout(getPatientDisplayId(page), TAB_TIMEOUT, "getPatientDisplayId")) ??
+    patient.patientId;
+
+  await withTimeout(navigateToWeightHeightTab(page), TAB_TIMEOUT, "navigateToWeightHeightTab");
+  const weightHeight = await withTimeout(scrapeWeightHeight(page), TAB_TIMEOUT, "scrapeWeightHeight");
+
+  await withTimeout(navigateToOrdersTab(page), TAB_TIMEOUT, "navigateToOrdersTab");
+  const orderResults = await withTimeout(
+    downloadOrderImage(page, process.env.APP_URL, ORDERS_DIR),
+    TAB_TIMEOUT,
+    "downloadOrderImage"
+  );
+
+  if (orderResults.length > 0) {
+    for (const order of orderResults) {
+      orders.push({ ...order, ...weightHeight, patientId: displayId });
+    }
+  } else {
+    orders.push({
+      patientId: displayId,
+      orderId: `patient-${patient.patientId}`,
+      route: "",
+      schedule: "",
+      weightLbs: weightHeight.weightLbs,
+      weightKgs: weightHeight.weightKgs,
+      heightIn: weightHeight.heightIn,
+      heightCm: weightHeight.heightCm,
+      downloadStatus: "No Orders Found",
+    });
+  }
+
+  // ---- Documents ----
+  await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+  console.log("================================");
+  console.log("Patient:", patient.patientId);
+  console.log("URL:", page.url());
+  await withTimeout(navigateToDocumentsTab(page), TAB_TIMEOUT, "navigateToDocumentsTab");
+  // ADD THIS
+  const rows = page.locator('tbody[md-body] tr[md-row]');
+
+  console.log("Rows on page:", await rows.count());
+
+  if (await rows.count() > 0) {
+    console.log(
+      "First description:",
+      await rows.nth(0).locator("td").nth(3).innerText()
+    );
+  }
+  const docs = await withTimeout(
+    scrapeAndDownloadDocuments(page, patient.patientId, DOCUMENTS_DIR),
+    TAB_TIMEOUT,
+    "scrapeAndDownloadDocuments"
+  );
+  console.log("Docs returned:", docs.length);
+
+  docs.forEach((d) => { d.patientId = displayId; });
+  documents.push(...docs);
+
+  // ---- Treatment Notes ----
+  await page.goto(patient.url, { waitUntil: "domcontentloaded" });
+  await withTimeout(navigateToAppointmentsTab(page), TAB_TIMEOUT, "navigateToAppointmentsTab");
+  const completedAppts = await withTimeout(
+    scrapeCompletedAppointmentUrls(page, process.env.APP_URL),
+    TAB_TIMEOUT,
+    "scrapeCompletedAppointmentUrls"
+  );
+
+  for (const appt of completedAppts) {
+    try {
+      const note = await withTimeout(
+        scrapeTreatmentNote(page, patient.patientId, appt.url, process.env.APP_URL),
+        TAB_TIMEOUT,
+        `scrapeTreatmentNote ${appt.url}`
+      );
+      note.appointmentDate = appt.date;
+      note.patientId = displayId;
+      treatmentNotes.push(note);
+    } catch (err) {
+      console.warn(`Failed to scrape treatment note ${appt.url}:`, err.message);
+    }
+  }
+
+  return { displayId, orders, documents, treatmentNotes };
+}
 
 async function run() {
   const PATIENT_LIMIT = parseInt(process.env.PATIENT_LIMIT ?? "20", 10);
@@ -30,7 +127,7 @@ async function run() {
   const DOCUMENTS_DIR = path.join(DOWNLOAD_DIR, "documents");
   const sessionFile = "session.json";
   const hasSession = fs.existsSync(sessionFile);
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     acceptDownloads: true,
     storageState: hasSession ? sessionFile : undefined,
@@ -60,10 +157,19 @@ async function run() {
   await selectLocation(page, process.env.LOCATION_NAME);
   await navigateToPatients(page);
 
+  const rows = page.locator('tbody[md-body] tr[md-row]');
+
+  await rows.first().waitFor({ state: "visible", timeout: 10000 }).catch(() => { });
+
+  console.log("Rows:", await rows.count());
+
+  const firstDescription = await rows.nth(0).locator("td").nth(3).innerText().catch(() => "");
+  console.log("First document:", firstDescription);
+
   const patients = await getAllPatientsByStatus(
     page,
     process.env.APP_URL,
-    "Established"
+    "New"
   );
 
   let processed = 0;
@@ -81,90 +187,71 @@ async function run() {
     }
 
     console.log(`[${processed + 1}/${PATIENT_LIMIT}] Processing patient ${patient.patientId}...`);
-    let displayId = patient.patientId;
+
     try {
-      await page.goto(patient.url, { waitUntil: "domcontentloaded" });
-      displayId = (await getPatientDisplayId(page)) ?? patient.patientId;
-      await navigateToWeightHeightTab(page);
-      const weightHeight = await scrapeWeightHeight(page);
-      await navigateToOrdersTab(page);
-      console.log(
-        "Order cards:",
-        await page.locator("order-detail-react").count()
+      // Whole patient (including the one retry) must finish inside 2 minutes,
+      // otherwise it's abandoned and we move on.
+      const result = await withTimeout(
+        retryOnce(
+          () => processPatient(page, patient, ORDERS_DIR, DOCUMENTS_DIR),
+          `patient ${patient.patientId}`
+        ),
+        PATIENT_TIMEOUT,
+        `patient ${patient.patientId} (overall)`
       );
 
-      console.log(
-        "View Order buttons:",
-        await page.locator('button[aria-label="view order image"]').count()
-      );
-      const orders = await downloadOrderImage(page, process.env.APP_URL, ORDERS_DIR);
+      // Keep running totals for the console summary only.
+      allOrders.push(...result.orders);
+      allDocuments.push(...result.documents);
+      allTreatmentNotes.push(...result.treatmentNotes);
 
-      if (orders.length > 0) {
-        for (const order of orders) {
-          const entry = { ...order, ...weightHeight, patientId: displayId };   // was patient.patientId
-          allOrders.push(entry);
-        }
-      } else {
-        allOrders.push({
-          patientId: displayId,
-          orderId: `patient-${patient.patientId}`,
-          route: "",
-          schedule: "",
-          weightLbs: weightHeight.weightLbs,
-          weightKgs: weightHeight.weightKgs,
-          heightIn: weightHeight.heightIn,
-          heightCm: weightHeight.heightCm,
-          downloadStatus: "No Orders Found",
-        });
-      }
+      // Write ONLY this patient's rows — excel.js already dedupes against
+      // what's on disk, so passing just the new batch keeps each write fast
+      // instead of re-scanning the whole growing array every time.
+      await createOrdersExcel(result.orders.filter(Boolean), DOWNLOAD_DIR);
+      await updateDocumentsExcel(result.documents, DOWNLOAD_DIR);
+      await updateTreatmentNotesExcel(result.treatmentNotes, DOWNLOAD_DIR);
 
-      // ---- Documents section ----
-      await page.goto(patient.url, { waitUntil: "domcontentloaded" });
-      await navigateToDocumentsTab(page);
-      const docs = await scrapeAndDownloadDocuments(page, patient.patientId, DOCUMENTS_DIR);
-      docs.forEach(d => { d.patientId = displayId; }); 
-      allDocuments.push(...docs);
-      console.log(`Documents scraped for patient ${patient.patientId}: ${docs.length} found.`);
-      // ---------------------------
-
+      // Checkpoint is written AFTER the excel writes succeed, so a crash
+      // mid-run can never mark a patient "done" whose data isn't saved yet.
       markPatientDone(patient.patientId, checkpoint);
       processed++;
       console.log(`Patient ${patient.patientId} done. (${processed}/${PATIENT_LIMIT})`);
     } catch (err) {
-      console.error(`Error processing patient ${patient.patientId}:`, err.message);
-      allOrders.push({
-        patientId: displayId,
+      console.error(
+        `Patient ${patient.patientId} failed/timed out after retry:`,
+        err.message
+      );
+
+      const errorRow = {
+        patientId: patient.patientId,
         orderId: `patient-${patient.patientId}`,
         route: "",
         schedule: "",
         downloadStatus: `Error: ${err.message.slice(0, 60)}`,
-      });
+      };
+      allOrders.push(errorRow);
+      await createOrdersExcel([errorRow], DOWNLOAD_DIR);
+
+      // Do NOT markPatientDone — leave it unmarked so the next run retries it.
       processed++;
-    }
-    // ---- Treatment Notes section ----
-    await page.goto(patient.url, { waitUntil: "domcontentloaded" });
-    await navigateToAppointmentsTab(page);
 
-    const completedAppts = await scrapeCompletedAppointmentUrls(page, process.env.APP_URL);
-    console.log(`Found ${completedAppts.length} completed appointments for patient ${patient.patientId}`);
-
-    for (const appt of completedAppts) {
+      // A timed-out step may leave the page mid-action (stuck click, open
+      // dialog, wrong tab). Reset to a known page before the next patient.
       try {
-        const note = await scrapeTreatmentNote(page, patient.patientId, appt.url, process.env.APP_URL);
-        note.appointmentDate = appt.date;
-        note.patientId = displayId;
-        allTreatmentNotes.push(note);
-        console.log(`Treatment note scraped: appointment ${note.appointmentId} (${appt.date})`);
-      } catch (err) {
-        console.warn(`Failed to scrape treatment note ${appt.url}:`, err.message);
+        await page.goto(process.env.APP_URL, {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
+        });
+      } catch (resetErr) {
+        console.warn("Page reset after failure also failed:", resetErr.message);
       }
     }
-    // ----------------------------------
   }
 
-  await createOrdersExcel(allOrders.filter(Boolean), DOWNLOAD_DIR);
-  await updateDocumentsExcel(allDocuments, DOWNLOAD_DIR);
-  await updateTreatmentNotesExcel(allTreatmentNotes, DOWNLOAD_DIR);
+  console.log(
+    `Run complete: ${allOrders.length} order rows, ${allDocuments.length} document rows, ${allTreatmentNotes.length} treatment notes processed.`
+  );
 
   await browser.close();
 }
